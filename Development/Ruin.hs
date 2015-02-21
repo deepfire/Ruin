@@ -34,14 +34,6 @@ module Development.Ruin
     , VarMap(..), VarEnv(..), VarSpec(..), OptSpec, derive_merged_optmap, derive_optdescrs
     , varspec_add
 
-    -- * Shake re-exports
-    , (<>), (</>), (<.>), (-<.>), (*>), (?>)
-    , Action, cmd, command
-    , shakeArgsWith, ShakeOptions(..), shakeOptions, getVerbosity
-    , Verbosity(..), putQuiet, putNormal, putLoud
-    , want, need, phony
-    , needMakefileDependencies, removeFilesAfter
-
     -- * Util
     , exec, shell, unsafeExec, unsafeShell, cmd2
     , enHashMap
@@ -59,7 +51,6 @@ import Data.HashMap.Lazy (HashMap, elems, fromList, toList, (!))
 import Development.Shake
 import Development.Shake.Command()
 import Development.Shake.FilePath
-import Development.Shake.Util
 
 -- import Prelude.Unicode
 
