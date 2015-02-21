@@ -344,7 +344,9 @@ evalCtx ctxenv@(CtxMap ctxmap) kind plat ckind mFilename (Ctx parents cases) =
     concat $ (map evalParent parents) ++ (take 1 $ filter (not . null) $ map evalCase cases)
         where evalCase (caseCond, caseVals) =
                   if (eval_CtxExp kind plat ckind mFilename caseCond) then caseVals else []
-              evalParent (Left pname) = evalCtx ctxenv kind plat ckind mFilename $ ctxmap ! pname
+              evalParent (Left pname) = evalCtx ctxenv kind plat ckind mFilename $ case H.lookup pname ctxmap of
+                                                                                     Nothing -> error $ printf "Unknown context parent node name: '%s'" pname
+                                                                                     Just x  -> x
               evalParent (Right p)    = evalCtx ctxenv kind plat ckind mFilename p
 
 -- syntactic sugar for pretty Ctx creation.  Might go unused at some point.
