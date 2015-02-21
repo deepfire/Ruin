@@ -37,7 +37,7 @@ module Development.Ruin
     -- * Shake re-exports
     , (<>), (</>), (<.>), (-<.>), (*>), (?>)
     , Action, cmd, command
-    , shakeArgsWith, ShakeOptions(..), shakeOptions
+    , shakeArgsWith, ShakeOptions(..), shakeOptions, getVerbosity
     , Verbosity(..), putQuiet, putNormal, putLoud
     , want, need, phony
     , needMakefileDependencies, removeFilesAfter
