@@ -1,4 +1,4 @@
-{-# LANGUAGE DataKinds, DeriveGeneric, ExtendedDefaultRules, GADTs, KindSignatures, MultiWayIf, ScopedTypeVariables, StandaloneDeriving, QuasiQuotes, UnicodeSyntax, ViewPatterns #-}
+{-# LANGUAGE CPP, DataKinds, DeriveGeneric, ExtendedDefaultRules, GADTs, KindSignatures, MultiWayIf, ScopedTypeVariables, StandaloneDeriving, QuasiQuotes, UnicodeSyntax, ViewPatterns #-}
 
 -- | A module for declarative definition of complex build systems.
 -- Ruin tries to provide the build system engineer with a language closer to what
@@ -38,6 +38,7 @@ module Development.Ruin
     , exec, shell, unsafeExec, unsafeShell, cmd2
     , enHashMap
     , lcstr, lcShow
+    , (%>)
     ) where
 
 import GHC.Generics (Generic)
@@ -66,6 +67,10 @@ import Text.PrettyPrint.GenericPretty (pretty, Out(..), doc)
 import Text.PrettyPrint (parens, (<+>), ($$), (<>), text)
 import Text.Printf (printf)
 import Data.Maybe (fromMaybe)
+
+#if (__GLASGOW_HASKELL__ < 708)
+(%>) = (*>)
+#endif
 
 ---
 --- Silliness
