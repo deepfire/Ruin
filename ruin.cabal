@@ -12,13 +12,6 @@ description:
      - Tools & tool pipelines
             - Components
 
-source-repository head
-    type:     git
-    location: https://github.com/deepfire/Ruin.git
-bug-reports:         https://github.com/deepfire/Ruin/issues
-
-tested-with:         GHC==7.8.3, GHC==7.6.3
-
 license:             BSD2
 license-file:        LICENSE
 author:              Kosyrev Serge
@@ -28,6 +21,14 @@ category:            Development
 build-type:          Simple
 extra-source-files:  README.org
 cabal-version:       >=1.10
+
+bug-reports:         https://github.com/deepfire/Ruin/issues
+
+tested-with:         GHC==7.8.3, GHC==7.6.3
+
+source-repository head
+    type:     git
+    location: https://github.com/deepfire/Ruin.git
 
 library
   exposed-modules:     Development.Ruin
