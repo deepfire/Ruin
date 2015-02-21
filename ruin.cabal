@@ -1,0 +1,38 @@
+name:                ruin
+id:                  ruin
+version:             0.1.0.0
+synopsis:            Higher-level build system DSL, atop Neil Mitchell's Shake.
+description:
+
+    Ruin is a Haskell-based DSL layer atop Shake, used to define complex build
+    systems in terms that are supposedly closer to what a build engineer might
+    think in:
+
+     - Platforms (Arch, OS)
+     - Tools & tool pipelines
+            - Components
+
+source-repository head
+    type:     git
+    location: https://github.com/deepfire/Ruin.git
+bug-reports:         https://github.com/deepfire/Ruin/issues
+
+tested-with:         GHC==7.8.3, GHC==7.6.3
+
+license:             BSD2
+license-file:        LICENSE
+author:              Kosyrev Serge
+maintainer:          _deepfire@feelingofgreen.ru
+copyright:           Kosyrev Serge 2015
+category:            Development
+build-type:          Simple
+extra-source-files:  README.org
+cabal-version:       >=1.10
+
+library
+  exposed-modules:     Development.Ruin
+  -- other-modules:       
+  other-extensions:    DataKinds, DeriveGeneric, ExtendedDefaultRules, GADTs, KindSignatures, MultiWayIf, ScopedTypeVariables, StandaloneDeriving, QuasiQuotes, UnicodeSyntax, ViewPatterns
+  build-depends:       base >=4.7 && <4.8, hashable >=1.2 && <1.3, unordered-containers >=0.2 && <0.3, shake >=0.14 && <0.15, process >=1.2 && <1.3, MissingH >=1.3 && <1.4, GenericPretty >=1.2 && <1.3, pretty >=1.1 && <1.2
+  -- hs-source-dirs:      
+  default-language:    Haskell2010

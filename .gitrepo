@@ -1,0 +1,11 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/git-commands/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:deepfire/Ruin.git
+	branch = master
+	commit = c1d4d99c97f4a2da9f9750a84f91b0c4801b08ab
+	parent = cedd9c8ca8928999591ff191cbe313fae980d65e
+	cmdver = 0.2.0

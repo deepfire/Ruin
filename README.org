@@ -1,0 +1,10 @@
+#+startup: hidestars odd
+
+* Ruin
+
+A higher-level DSL layer atop Shake, used to define complex build systems in terms
+that are supposedly closer to what a build engineer might think in:
+
+  - Platforms (Arch, OS)
+  - Tools & tool pipelines
+  - Components
