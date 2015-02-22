@@ -48,6 +48,7 @@ import Data.Char (toLower)
 import Data.List (intercalate)
 import qualified Data.HashMap.Lazy as H
 import Data.HashMap.Lazy (HashMap, elems, fromList, toList, (!))
+import Data.String.Utils (startswith)
 
 import Development.Shake
 import Development.Shake.Command()
@@ -255,8 +256,8 @@ eval_CtxExp kind plat@(Plat arch os@(OS ostype _)) ckind mFilename expr =
       ForPlat      expPlat      -> expPlat   == plat
       WithTool     expTool      -> expTool   == ckind
 
-      ForInput     expString | Nothing    <- mFilename -> False
-                             | Just fname <- mFilename -> fname == expString
+      ForInput     expString | Nothing   <- mFilename -> False
+                             | Just file <- mFilename -> startswith expString file
 
       ShellTest    shCmd expect      -> (unsafeShell shCmd) == expect
       ExecTest     argv0 argv expect -> (unsafeExec argv0 argv) == expect
