@@ -338,7 +338,7 @@ newtype CtxMap tag tkind ty arch osty osv = CtxMap (HashMap String (Ctx tag tkin
 
 evalCtx :: (Tag tag, ToolKind tkind, Type ty) => CtxMap tag tkind ty arch osty osv -> tag -> Plat arch osty osv -> tkind -> Maybe String -> Ctx tag tkind ty arch osty osv -> [CtxVal ty]
 evalCtx ctxenv@(CtxMap ctxmap) kind plat ckind mFilename (Ctx parents cases) =
-    concat $ (map evalParent parents) ++ (take 1 $ filter (not . null) $ map evalCase cases)
+    concat $ (map evalParent parents) ++ (filter (not . null) $ map evalCase cases)
         where evalCase (caseCond, caseVals) =
                   if (eval_CtxExp kind plat ckind mFilename caseCond) then caseVals else []
               evalParent (Left pname) = evalCtx ctxenv kind plat ckind mFilename $ case H.lookup pname ctxmap of
