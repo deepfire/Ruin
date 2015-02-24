@@ -103,8 +103,9 @@ shell comm = do
 
 cmd2 :: String -> [String] -> Action ()
 cmd2 comm args = do
-    _ <- liftIO $ rawSystem comm args
-    return ()
+  putLoud $ printf "cmd> %s %s" comm $ intercalate " " args
+  _ <- liftIO $ rawSystem comm args
+  return ()
 
 unsafeExec :: String -> [String] -> String
 unsafeExec executable args = unsafePerformIO (exec executable args)
