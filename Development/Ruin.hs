@@ -48,7 +48,10 @@ import Data.Char (toLower)
 import Data.List (intercalate)
 import qualified Data.HashMap.Lazy as H
 import Data.HashMap.Lazy (HashMap, elems, fromList, toList, (!))
+import qualified Data.HashSet as HS
 import Data.String.Utils (startswith)
+
+-- import Debug.Trace (trace)
 
 import Development.Shake
 import Development.Shake.Command()
@@ -359,15 +362,20 @@ data Ctx tag tkind ty arch osty osv =
 instance (Hashable a, Hashable b, Hashable c, Hashable d, Hashable e, Hashable f) => Hashable (Ctx a b c d e f)
 newtype CtxMap tag tkind ty arch osty osv = CtxMap (HashMap String (Ctx tag tkind ty arch osty osv))
 
-evalCtx :: (Tag tag, ToolKind tkind, Type ty) => CtxMap tag tkind ty arch osty osv -> tag -> Plat arch osty osv -> tkind -> Maybe String -> Ctx tag tkind ty arch osty osv -> [CtxVal ty]
-evalCtx ctxenv@(CtxMap ctxmap) kind plat ckind mFilename (Ctx parents cases) =
-    concat $ (map evalParent parents) ++ (filter (not . null) $ map evalCase cases)
-        where evalCase (caseCond, caseVals) =
-                  if (eval_CtxExp kind plat ckind mFilename caseCond) then caseVals else []
-              evalParent (Left pname) = evalCtx ctxenv kind plat ckind mFilename $ case H.lookup pname ctxmap of
-                                                                                     Nothing -> error $ printf "Unknown context parent node name: '%s'" pname
-                                                                                     Just x  -> x
-              evalParent (Right p)    = evalCtx ctxenv kind plat ckind mFilename p
+eval_Ctx :: (Arch arch, OSType osty, OSVersion osv, Tag tag, ToolKind tkind, Type ty) =>
+            CtxMap tag tkind ty arch osty osv -> tag -> Plat arch osty osv -> tkind -> Maybe String -> -- context
+            Ctx tag tkind ty arch osty osv -> [CtxVal ty]                                              -- argument -> return value
+eval_Ctx (CtxMap ctxmap) kind plat ckind mFilename ctx =
+    let (_, ret) = eval (HS.empty, []) (Right ctx) in ret
+    where 
+          find_parent (Right p) = p
+          find_parent (Left n)  = case H.lookup n ctxmap of
+                                    Nothing -> error $ printf "Unknown context parent node name: '%s'" n
+                                    Just x  -> x
+          eval_case (caseCond, caseVals) = if (eval_CtxExp kind plat ckind mFilename caseCond) then caseVals else []
+          eval (seen, acc) (find_parent -> this@(Ctx parents cases)) =
+              if HS.member this seen then (seen, acc)
+              else foldl eval (HS.insert this seen, acc ++ concat (map eval_case cases)) parents
 
 -- syntactic sugar for pretty Ctx creation.  Might go unused at some point.
 ctxR :: Tag a => [CtxVal c] -> Ctx a b c d e f
@@ -553,8 +561,8 @@ compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chains tool
                                | length cmTags == 1                             -> cmName ++ "-" ++ lcShow arch
                                |                       length compKindOuts == 1 -> cmName ++ "-" ++ lcShow tag
                                | True                                           -> cmName ++ "-" ++ lcShow tag  ++ "-" ++ lcShow arch
-                        xinputs tkind      = filter ctxValXInputsP $ evalCtx ctxmap tag slicePlat tkind Nothing     ctx
-                        xflags  tkind file = filter ctxValXFlagsP  $ evalCtx ctxmap tag slicePlat tkind (Just file) ctx
+                        xinputs tkind      = filter ctxValXInputsP $ eval_Ctx ctxmap tag slicePlat tkind Nothing     ctx
+                        xflags  tkind file = filter ctxValXFlagsP  $ eval_Ctx ctxmap tag slicePlat tkind (Just file) ctx
                         chainlinks   = forge_chainlinks compmap bbles chains tools name chain_top (this_plat, slicePlat) xinputs topty slicePath
                         out_filemap  = fromList [   (outf, (infs, inty, outf, outty, tkind, tool, b))
                                                 | ChainLink infs inty outf outty tkind tool <- chainlinks ]
