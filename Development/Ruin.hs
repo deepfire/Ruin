@@ -180,7 +180,7 @@ exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for
          | c@(Tool toolkind tyfrom tyto tool_variants _) <- available_tools
          , (on, for, tool_exec)                          <- tool_variants
          , want_toolkind == toolkind && tyfrom == want_tyfrom && tyto == want_tyto && on == this_plat && for == for_plat ] of
-      []  -> error (printf "Failed to find a suitable tool: on-plat=%s type=%s to-plat=%s" (lcShow this_plat) (lcShow want_tyfrom) (lcShow for_plat))
+      []  -> error (printf "Failed to find a suitable tool: (%s<-%s) on-plat=%s to-plat=%s" (show want_tyto) (show want_tyfrom) (show this_plat) (show for_plat))
       (Tool toolkind _ _ _ fnV, tool_exec):_ ->
           case (fnV, ins) of
             (Left  fn, Left  arg)  -> fn tool_exec out arg flags
