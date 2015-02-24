@@ -128,14 +128,16 @@ retype_file newty f = f -<.> type_extension newty
 
 
 --- Target specification
-class (Eq a, Show a, Generic a, Out a) => Arch a
-class (Eq a, Show a, Generic a, Out a) => OSType a where
-class (Eq a, Show a, Generic a, Out a) => OSVersion a
+class (Eq a, Show a, Generic a, Out a, Hashable a) => Arch a
+class (Eq a, Show a, Generic a, Out a, Hashable a) => OSType a where
+class (Eq a, Show a, Generic a, Out a, Hashable a) => OSVersion a
 
 data OS a b where
     OS :: (OSType a, OSVersion b) => a -> (Maybe b) -> OS a b
 
 deriving instance Show (OS a b)
+instance Hashable (OS a b) where
+     hashWithSalt s (OS x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
 instance (Out a, Out b) => Out (OS a b) where
   doc (OS ostype osver) = doc ostype <> text "-" <> case osver of
                                                       Nothing  -> text "*-*"
@@ -149,6 +151,8 @@ instance Eq  (OS a b) where -- treat Nothing as a wildcard during comparison:
 data Plat a b c where
     Plat :: (Arch a, OSType b, OSVersion c) => a -> OS b c -> Plat a b c
 deriving instance Show (Plat a b c)
+instance Hashable (Plat a b c) where
+     hashWithSalt s (Plat x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
 instance (Out a, Out b, Out c) => Out (Plat a b c) where
   doc (Plat arch os) = doc arch <> text "-" <> doc os
   docPrec _ = doc
@@ -157,13 +161,14 @@ instance Eq  (Plat a b c) where
 
 
 --- Source -> target transformation
-class (Eq a, Hashable a, Out a, Show a) => ToolKind a
+class (Eq a, Generic a, Hashable a, Out a, Show a) => ToolKind a
 
 type ToolAction = String -> (Either String [String]) -> [String] -> Action ()
 
 data Tool a b c d e =
     Tool a b b [(Plat c d e, Plat c d e, String)] (Either (String -> String -> String -> [String] -> Action ())
-                                                          (String -> String -> [String] -> [String] -> Action ())) deriving (Generic)
+                                                          (String -> String -> [String] -> [String] -> Action ()))
+    deriving (Generic)
 
 instance (Out a, Out b) => Out (Tool a b c d e) where
     doc (Tool kind fty toty _ _) = text "Tool" <+> parens (text "xform:" <+> doc fty <> text "->" <> doc toty <+> doc kind)
@@ -199,37 +204,54 @@ data ChainLink typ tkind =
 
 
 -- A condition for extending the build environment
-class (Eq a, Hashable a, Out a, Show a) => Tag a
+class (Eq a, Hashable a, Out a, Show a, Generic a) => Tag a
 
 data CtxExp a b c d e where
-    AsPartOf  :: Tag a => a -> CtxExp a b c d e
-    ForArch   :: Tag a => c -> CtxExp a b c d e
-    ForOSType :: Tag a => d -> CtxExp a b c d e
-    ForOS     :: Tag a => OS d e -> CtxExp a b c d e
-    ForPlat   :: Tag a => Plat c d e -> CtxExp a b c d e
-    ForInput  :: Tag a => String -> CtxExp a b c d e                       -- Filename wildcard
-    WithTool  :: Tag a => b -> CtxExp a b c d e
-    ShellTest :: Tag a => String -> String -> CtxExp a b c d e             -- WARNING: the command is expected to be pure!
-    ExecTest  :: Tag a => String -> [String] -> String -> CtxExp a b c d e -- WARNING: ^^^
-    Not       :: Tag a => (CtxExp a b c d e) -> CtxExp a b c d e
-    And       :: Tag a => [CtxExp a b c d e] -> CtxExp a b c d e
-    Or        :: Tag a => [CtxExp a b c d e] -> CtxExp a b c d e
-    Always    :: Tag a => CtxExp a b c d e
+    AsPartOf  :: (Tag a, Generic a) => a -> CtxExp a b c d e
+    ForArch   :: (Tag a, Arch c) => c -> CtxExp a b c d e
+    ForOSType :: (Tag a, OSType d) => d -> CtxExp a b c d e
+    ForOS     :: (Tag a, OSType d) => OS d e -> CtxExp a b c d e
+    ForPlat   :: (Tag a) => Plat c d e -> CtxExp a b c d e
+    ForInput  :: (Tag a, Generic a) => String -> CtxExp a b c d e -- Filename wildcard
+    WithTool  :: (Tag a, ToolKind b) => b -> CtxExp a b c d e
+    ShellTest :: (Tag a, Generic a) => String -> String -> CtxExp a b c d e -- WARNING: the command is expected to be pure!
+    ExecTest  :: (Tag a, Generic a) => String -> [String] -> String -> CtxExp a b c d e -- WARNING: ^^^
+    Not       :: (Tag a, Generic a) => (CtxExp a b c d e) -> CtxExp a b c d e
+    And       :: (Tag a, Generic a) => [CtxExp a b c d e] -> CtxExp a b c d e
+    Or        :: (Tag a, Generic a) => [CtxExp a b c d e] -> CtxExp a b c d e
+    Always    :: (Tag a, Generic a) => CtxExp a b c d e
 
+deriving instance (Tag a, ToolKind b, Arch c, OSType d, OSVersion e) => Eq (CtxExp a b c d e)
 deriving instance (Tag a, ToolKind b, Arch c, OSType d, OSVersion e) => Show (CtxExp a b c d e)
+instance Hashable (CtxExp a b c d e) where
+     hashWithSalt s (AsPartOf x)     = s `hashWithSalt` (hash x)
+     hashWithSalt s (ForArch x)      = s `hashWithSalt` (hash x)
+     hashWithSalt s (ForOSType x)    = s `hashWithSalt` (hash x)
+     hashWithSalt s (ForOS x)        = s `hashWithSalt` (hash x)
+     hashWithSalt s (ForPlat x)      = s `hashWithSalt` (hash x)
+     hashWithSalt s (ForInput x)     = s `hashWithSalt` (hash x)
+     hashWithSalt s (WithTool x)     = s `hashWithSalt` (hash x)
+     hashWithSalt s (ShellTest x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
+     hashWithSalt s (ExecTest x y z) = s `hashWithSalt` (hash x) `hashWithSalt` (hash y) `hashWithSalt` (hash z)
+     hashWithSalt s (Not x)          = s `hashWithSalt` (hash x)
+     hashWithSalt s (And x)          = s `hashWithSalt` (hash x)
+     hashWithSalt s (Or x)           = s `hashWithSalt` (hash x)
+     hashWithSalt s Always           = s
 
 -- An atom of build environment
 data CtxVal a =
     XFlags  a [String] |          -- type flags
     XInputs (Files a)
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic)
+instance Hashable a => Hashable (CtxVal a)
 
 data Files a =
     Files     a String [String] | -- type srcRoot wildcards-as-per-System.Path.Glob
     TameFiles a String [String] | -- type srcRoot wildcard-expanded pathnames
     Comp String                 | -- component nesting
     Gen       a
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic)
+instance Hashable a => Hashable (Files a)
 
 ctxValXInputsP :: CtxVal a -> Bool
 ctxValXInputsP (XFlags _ _)   = False
@@ -333,8 +355,8 @@ data Ctx tag tkind ty arch osty osv =
     Ctx
     [Either String (Ctx tag tkind ty arch osty osv)] -- parent names
     [(CtxExp tag tkind arch osty osv, [CtxVal ty])]  -- cases
-    deriving (Show)
-
+    deriving (Eq, Show, Generic)
+instance (Hashable a, Hashable b, Hashable c, Hashable d, Hashable e, Hashable f) => Hashable (Ctx a b c d e f)
 newtype CtxMap tag tkind ty arch osty osv = CtxMap (HashMap String (Ctx tag tkind ty arch osty osv))
 
 evalCtx :: (Tag tag, ToolKind tkind, Type ty) => CtxMap tag tkind ty arch osty osv -> tag -> Plat arch osty osv -> tkind -> Maybe String -> Ctx tag tkind ty arch osty osv -> [CtxVal ty]
