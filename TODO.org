@@ -1,0 +1,23 @@
+#+startup: hidestars odd
+
+* Generalise tool preferences
+
+  Right now, the set of preferences is represented by a single ToolKind value.
+
+  It ought to be:
+
+  #+BEGIN_SRC haskell
+  (Type f, Type t, ToolKind tk) => HashMap (f, t) tk
+  #+END_SRC
+
+* Merge various context pieces
+
+  Right now, there's an assortment of contexts:
+
+  - Component
+  - Buildable
+  - Chain
+  - Tool
+  - Context
+
+  They're all passed around separately and rather unprofitably.
