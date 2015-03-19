@@ -280,7 +280,10 @@ data CtxVal ty =
     deriving (Eq, Show, Generic, Typeable)
 instance (Hashable ty) ⇒ Hashable (CtxVal ty)
 
-type XQuery ty = String → Bool → [CtxVal ty]
+xflags_type ∷ CtxVal ty → ty
+xflags_type (XFlags ty _) = ty
+
+type XQuery ty = (ty, String) → Bool → [CtxVal ty]
 
 data XIR tk ty where
     XIR ∷ (Typeable tk, Generic tk, ToolKind tk, Type ty) ⇒ XQuery ty → CtxVal ty → XIR tk ty
@@ -316,25 +319,25 @@ data Files a =
     deriving (Eq, Show, Generic)
 instance Hashable a ⇒ Hashable (Files a)
 
-eval_CtxExp ∷ ToolKind b ⇒ a → Plat c d e → b → Maybe String → CtxExp a b c d e → Bool
-eval_CtxExp kind plat@(Plat arch os@(OS ostype _)) tool mFilename expr =
+eval_CtxExp ∷ (ToolKind tkind, Type ty) ⇒ tag → Plat arch osty osv → tkind → Maybe (ty, String) → CtxExp tag tkind arch osty osv → Bool
+eval_CtxExp tag plat@(Plat arch os@(OS ostype _)) tkind mFilename expr =
     case expr of
-      AsPartOf     expKind      → expKind   ≡ kind
+      AsPartOf     expTag       → expTag    ≡ tag
       ForArch      expArch      → expArch   ≡ arch
       ForOSType    expOSType    → expOSType ≡ ostype
       ForOS        expOS        → expOS     ≡ os
       ForPlat      expPlat      → expPlat   ≡ plat
-      WithTool     expTool      → expTool   ≡ tool
+      WithTool     expTkind     → expTkind  ≡ tkind
 
-      ForInput     expString | Nothing   ← mFilename → False
-                             | Just file ← mFilename → startswith expString file
+      ForInput     expString | Nothing        ← mFilename → False
+                             | Just (_, file) ← mFilename → startswith expString file
 
       ShellTest    shCmd expect      → (unsafeShell shCmd) ≡ expect
       ExecTest     argv0 argv expect → (unsafeExec argv0 argv) ≡ expect
 
-      Not sub   → not $ eval_CtxExp kind plat tool mFilename  sub
-      And subs  → all  (eval_CtxExp kind plat tool mFilename) subs
-      Or  subs  → any  (eval_CtxExp kind plat tool mFilename) subs
+      Not sub   → not $ eval_CtxExp tag plat tkind mFilename  sub
+      And subs  → all  (eval_CtxExp tag plat tkind mFilename) subs
+      Or  subs  → any  (eval_CtxExp tag plat tkind mFilename) subs
       Always    → True
 
 
@@ -410,11 +413,11 @@ make_xquery ∷ (Tag tag, ToolKind tkind, Type ty, Arch arch, OSType osty, OSVer
                CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind → Ctx tag tkind ty arch osty osv → XQuery ty
 make_xquery ctxmap tag plat tkind ctx =
     xquery
-    where xquery f explainp = map fromRight $ eval_Ctx ctxmap tag plat tkind (Just f) explainp ctx
+    where xquery ty_f explainp = map fromRight $ eval_Ctx ctxmap tag plat tkind (Just ty_f) explainp ctx
 
 eval_Ctx ∷ (Arch arch, OSType osty, OSVersion osv, Tag tag, ToolKind tkind, Type ty) ⇒
             CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind →     -- context (general, not Ctx sense)
-            Maybe String → Bool →                                                      -- record context, turn on explanation mode
+            Maybe (ty, String) → Bool →                                                -- record context, turn on explanation mode
             Ctx tag tkind ty arch osty osv → [Either (XIR tkind ty) (CtxVal ty)]       -- argument → return value
 eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
     ret
@@ -435,9 +438,9 @@ eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
               else (if explain_mode then trace (printf "visit> %s → %s" (ctxdesc this) (show added)) else id) res
                    where (ctxval_res, val_filter_fn)
                                = case stage of
-                                   Nothing → (\val → Left $ XIR xquery val, ctxval_ξp)
+                                   Nothing       → (\val → Left $ XIR xquery val,         ctxval_ξp)
                                         where xquery = make_xquery cxm tag plat tool this
-                                   Just _  → (\val → Right val,             ctxval_xfp)
+                                   Just (ty, _)  → (\val → Right $ val,                   \x → ctxval_xfp x ∧ (xflags_type x ≡ ty))
                          added = concat (map (eval_case ctxval_res val_filter_fn) cases)
                          res   = foldl eval (HS.insert this seen, added ++ acc) parents
 
@@ -506,6 +509,12 @@ data Component a b c d e f g =
 
 newtype CompMap a b c d e f g = CompMap (HashMap String (Component a b c d e f g))
 
+input_type (CompMap comap) chains inp =
+    case inp of
+      Comp cname       → component_type chains $ comap ! cname
+      Gen  ty _ _      → ty
+      Srcs ty _ _      → ty
+
 
 --   Buildable:  a physical build product ∷ [Slice] → [Component] → [Buildable]
 --    - component
@@ -542,12 +551,6 @@ component_type _                (Target _ _ ty _ _ _)        = ty
 buildable_output ∷ Buildable a b c d e f g → String
 buildable_output (Buildable name (Component _ _ _ _ _ _) _ _ (Plat _ (OS osty _)) path _) = path </> name <.> os_execsuffix osty
 buildable_output (Buildable _    (Target _ _ _ file _ _) _ _ _ _ _)                       = file
-
-input_type (CompMap comap) chains inp =
-    case inp of
-      Comp cname       → component_type chains $ comap ! cname
-      Gen  ty _ _      → ty
-      Srcs ty _ _      → ty
 
 type ChainLinkConsCtx = (String, Int, Int)
 
