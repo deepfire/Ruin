@@ -11,11 +11,11 @@ module Development.Ruin
     , os_execsuffix
 
     -- * Source, intermediate & destination file types
-    , Inputs(..), Files(..)
     , Type, none, stage, stagep, type_fusing_p, type_extension, retype_file
+    , Inputs(..), FlagType(..)
 
     -- * Transformations
-    , Tool(..), exec_tool, ToolKind, notool, ToolActionEither, ToolActionSingle, ToolActionMulti
+    , Tool(..), exec_tool, ToolKind, notool, ToolAction, ToolActionSimple
     , Chain(..), ChainName, ChainMap(..), ChainLink(..)
 
     -- * Context
@@ -191,20 +191,18 @@ instance Eq  (Plat a b c) where
 class (Eq a, Generic a, Hashable a, Ord a, Out a, Show a, Typeable a) ⇒ ToolKind a where
     notool ∷ ToolKind a ⇒ a
 
-type ToolActionEither  = String → (Either String [String]) → [String] → Action ()
-type ToolActionMulti   = String → [String] →                 [String] → Action ()
-type ToolActionSingle  = String →  String  →                 [String] → Action ()
-type ToolActionSimple  = String → [String] →                            Action ()
+type ToolAction        = String → [String] → [String] → Action ()
+type ToolActionSimple  = String → [String] →            Action () -- a flagless option
 
 data Tool a b c d e =
-    Tool a b b [(Plat c d e, Plat c d e, String)] (Either (String → ToolActionSingle) (String → ToolActionMulti))
+    Tool a b b [(Plat c d e, Plat c d e, String)] (String → ToolAction)
     deriving (Generic)
 
 instance (Out a, Out b) ⇒ Out (Tool a b c d e) where
     doc (Tool kind fty toty _ _) = text "Tool" <+> parens (text "xform:" <+> doc fty <> text "→" <> doc toty <+> doc kind)
     docPrec _ = doc
 
-exec_tool ∷ (ToolKind a, Type b) ⇒ [Tool a b c d e] → a → (b, b) → (Plat c d e, Plat c d e) → ToolActionEither
+exec_tool ∷ (ToolKind a, Type b) ⇒ [Tool a b c d e] → a → (b, b) → (Plat c d e, Plat c d e) → ToolAction
 exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for_plat) out ins flags =
     case [ ignt trace (printf "found %s %s→%s for %s" (show toolkind) (show tyfrom) (show tyto) out)
            (c, tool_exec)
@@ -214,11 +212,7 @@ exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for
            --               (show toolkind) (show want_toolkind) (show tyfrom) (show want_tyfrom) (show tyto) (show want_tyto) (show on) (show this_plat) (show for) (show for_plat)) $
            toolkind ≡ want_toolkind ∧ tyfrom ≡ want_tyfrom ∧ tyto ≡ want_tyto ∧ on ≡ this_plat ∧ for ≡ for_plat ] of
       []  → error (printf "Failed to find a suitable tool: (%s←%s) on-plat=%s to-plat=%s" (show want_tyto) (show want_tyfrom) (show this_plat) (show for_plat))
-      (Tool toolkind _ _ _ fnV, tool_exec):_ →
-          case (fnV, ins) of
-            (Left  fn, Left  arg)  → fn tool_exec out arg flags
-            (Right fn, Right args) → fn tool_exec out args flags
-            _                      → error "Tool/inputs arity mismatch: used %s on an %sary input" (show toolkind) $ eitherConst "un" "multi" ins
+      (Tool toolkind _ _ _ fnV, tool_exec):_ → fnV tool_exec out ins flags
 
 -- Chains
 -- Because of ambiguities of composition (f.e. both GCCLD and LD can perform CObj → Executable transforms)
@@ -234,7 +228,7 @@ deriving instance Show (Chain typ tkind)
 newtype ChainMap cn ty tk = ChainMap (HashMap cn (Chain ty tk))
 
 data ChainLink ty tkind =
-    ChainLink [String] ty String ty tkind (XQuery ty) ToolActionEither
+    ChainLink [String] ty String ty tkind (XQuery tkind ty) ToolAction
 
 instance (Show a, Show b) ⇒ Show (ChainLink a b) where
     show (ChainLink infs inty outf outty tkin _ _) = printf "#<LINK (%s<-%s) %s: %s ← %s" (show outty) (show inty) (show tkin) (show outf) (show infs)
@@ -276,29 +270,32 @@ instance Hashable (CtxExp a b c d e) where
      hashWithSalt s Always           = s
 
 -- An atom of build environment
-data CtxVal ty =
-    XFlags  ty [String] |          -- type flags
-    XInputs (Inputs ty)
+data CtxVal tk ty
+    = XFlags  (FlagType tk ty) [String]    -- ^ Flags added at the current point of context.
+    | XInputs (Inputs ty)                  -- ^ Inputs added at the current point of context.
     deriving (Eq, Show, Generic, Typeable)
-instance (Hashable ty) ⇒ Hashable (CtxVal ty)
+instance (Hashable tk, Hashable ty) ⇒ Hashable (CtxVal tk ty)
 
-xflags_type ∷ CtxVal ty → ty
-xflags_type (XFlags ty _) = ty
-
-type XQuery ty = (ty, String) → Bool → [CtxVal ty]
+type XQuery tk ty = (ty, String) → Bool → [CtxVal tk ty]
 
 data XIR tk ty where
-    XIR ∷ (Typeable tk, Generic tk, ToolKind tk, Type ty) ⇒ XQuery ty → CtxVal ty → XIR tk ty
+    XIR ∷ (Typeable tk, Generic tk, ToolKind tk, Type ty) ⇒ XQuery tk ty → CtxVal tk ty → XIR tk ty
 deriving instance (Typeable tk, Generic tk, ToolKind tk, Type ty) ⇒ Show (XIR tk ty)
 
-ctxval_ξp    ∷ CtxVal d → Bool
+ctxval_ξp    ∷ CtxVal c d → Bool
 ctxval_ξp   (XInputs _ )  = True
 ctxval_ξp    _            = False
-ctxval_xfp   ∷ CtxVal d → Bool
+ctxval_xfp   ∷ CtxVal c d → Bool
 ctxval_xfp  (XFlags _ _)  = True
 ctxval_xfp   _            = False
 
 -- newtype ΞMap tk ty = ΞMap (HashMap (CtxVal ty) (Chain tk ty))
+
+data FlagType tk ty
+    = ForTool tk                           -- ^ For transforms employing tools of specified kind.
+    | ForType ty                           -- ^ For non-fusing transforms: the source type must match;  for fusing transforms: the destination type must match.
+    deriving (Eq, Generic, Typeable, Show)
+instance (Hashable tk, Hashable ty) ⇒ Hashable (FlagType tk ty)
 
 data Inputs ty
     = Srcs ty String [String]              -- ^ Tool-transformable input files (aka "sources"); Second argument is common root, third is wildcards-as-per-System.Path.Glob
@@ -405,13 +402,13 @@ derive_optdescrs optspecs =
 data Ctx tag tkind ty arch osty osv =
     Ctx
     [Either String (Ctx tag tkind ty arch osty osv)] -- parent names
-    [(CtxExp tag tkind arch osty osv, [CtxVal ty])]  -- cases
+    [(CtxExp tag tkind arch osty osv, [CtxVal tkind ty])]  -- cases
     deriving (Eq, Show, Generic)
 instance (Hashable a, Hashable b, Hashable c, Hashable d, Hashable e, Hashable f) ⇒ Hashable (Ctx a b c d e f)
 newtype CtxMap tag tk ty arch osty osv = CtxMap (HashMap String (Ctx tag tk ty arch osty osv))
 
 make_xquery ∷ (Tag tag, ToolKind tkind, Type ty, Arch arch, OSType osty, OSVersion osv) ⇒
-               CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind → Ctx tag tkind ty arch osty osv → XQuery ty
+               CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind → Ctx tag tkind ty arch osty osv → XQuery tkind ty
 make_xquery ctxmap tag plat tkind ctx =
     xquery
     where xquery ty_f explainp = map fromRight $ eval_Ctx ctxmap tag plat tkind (Just ty_f) explainp ctx
@@ -419,7 +416,7 @@ make_xquery ctxmap tag plat tkind ctx =
 eval_Ctx ∷ (Arch arch, OSType osty, OSVersion osv, Tag tag, ToolKind tkind, Type ty) ⇒
             CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind →     -- context (general, not Ctx sense)
             Maybe (ty, String) → Bool →                                                -- record context, turn on explanation mode
-            Ctx tag tkind ty arch osty osv → [Either (XIR tkind ty) (CtxVal ty)]       -- argument → return value
+            Ctx tag tkind ty arch osty osv → [Either (XIR tkind ty) (CtxVal tkind ty)] -- argument → return value
 eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
     ret
     where (_, ret)  = eval (HS.empty, []) (Right ctx_top)
@@ -441,40 +438,43 @@ eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
                                = case stage of
                                    Nothing       → (\val → Left $ XIR xquery val,         ctxval_ξp)
                                         where xquery = make_xquery cxm tag plat tool this
-                                   Just (ty, _)  → (\val → Right $ val,                   \x → ctxval_xfp x ∧ (xflags_type x ≡ ty))
+                                   Just (ty, _)  → (\val → Right $ val,                   ctxval_xflags_matchp ty tool)
+                         ctxval_xflags_matchp xty _   (XFlags (ForType ty) _) = xty ≡ ty
+                         ctxval_xflags_matchp _   xto (XFlags (ForTool to) _) = xto ≡ to
+                         ctxval_xflags_matchp _   _   _                       = False
                          added = concat (map (eval_case ctxval_res val_filter_fn) cases)
                          res   = foldl eval (HS.insert this seen, added ++ acc) parents
 
 -- syntactic sugar for pretty Ctx creation.  Might go unused at some point.
-ctxR ∷ Tag a ⇒ [CtxVal d] → Ctx a c d e f g
+ctxR ∷ Tag a ⇒ [CtxVal c d] → Ctx a c d e f g
 ctxR vals =
     Ctx [] [(Always, vals)]
 
-ctxRWhen ∷ Tag a ⇒ CtxExp a c e f g → [CtxVal d] → Ctx a c d e f g
+ctxRWhen ∷ Tag a ⇒ CtxExp a c e f g → [CtxVal c d] → Ctx a c d e f g
 ctxRWhen expr vals =
     Ctx [] [(expr, vals)]
 
-ctxRIf ∷ Tag a ⇒ CtxExp a c e f g → [CtxVal d] → [CtxVal d] → Ctx a c d e f g
+ctxRIf ∷ Tag a ⇒ CtxExp a c e f g → [CtxVal c d] → [CtxVal c d] → Ctx a c d e f g
 ctxRIf expr thens elses =
     Ctx [] $ [(expr, thens)] ++ [(Always, elses)]
 
-ctxRCase ∷ Tag a ⇒ [(CtxExp a c e f g, [CtxVal d])] → [CtxVal d] → Ctx a c d e f g
+ctxRCase ∷ Tag a ⇒ [(CtxExp a c e f g, [CtxVal c d])] → [CtxVal c d] → Ctx a c d e f g
 ctxRCase cases elses =
     Ctx [] $ cases ++ [(Always, elses)]
 
-ctxN ∷ Tag a ⇒ [String] → [CtxVal d] → Ctx a c d e f g
+ctxN ∷ Tag a ⇒ [String] → [CtxVal c d] → Ctx a c d e f g
 ctxN parents vals =
     Ctx (map Left parents) [(Always, vals)]
 
-ctxNWhen ∷ Tag a ⇒ [String] → CtxExp a c e f g → [CtxVal d] → Ctx a c d e f g
+ctxNWhen ∷ Tag a ⇒ [String] → CtxExp a c e f g → [CtxVal c d] → Ctx a c d e f g
 ctxNWhen parents expr vals =
     Ctx (map Left parents) [(expr, vals)]
 
-ctxNIf ∷ Tag a ⇒ [String] → CtxExp a c e f g → [CtxVal d] → [CtxVal d] → Ctx a c d e f g
+ctxNIf ∷ Tag a ⇒ [String] → CtxExp a c e f g → [CtxVal c d] → [CtxVal c d] → Ctx a c d e f g
 ctxNIf parents expr thens elses =
     Ctx (map Left parents) $ [(expr, thens)] ++ [(Always, elses)]
 
-ctxNCase ∷ Tag a ⇒ [String] → [(CtxExp a c e f g, [CtxVal d])] → [CtxVal d] → Ctx a c d e f g
+ctxNCase ∷ Tag a ⇒ [String] → [(CtxExp a c e f g, [CtxVal c d])] → [CtxVal c d] → Ctx a c d e f g
 ctxNCase parents cases elses =
     Ctx (map Left parents) $ cases ++ [(Always, elses)]
 
@@ -495,8 +495,8 @@ data Component a b c d e f g =
       cChainName       ∷ b,
       cTags            ∷ [a],
       cCtxNames        ∷ [String],
-      cAlways          ∷ [CtxVal d],
-      cCases           ∷ [(CtxExp a c e f g, [CtxVal d])]
+      cAlways          ∷ [CtxVal c d],
+      cCases           ∷ [(CtxExp a c e f g, [CtxVal c d])]
     } |
     Target {
       cName            ∷ String,
