@@ -11,8 +11,8 @@ module Development.Ruin
     , os_execsuffix
 
     -- * Source, intermediate & destination file types
-    , Type, none, type_fusing_p, type_extension, retype_file
     , Inputs(..), Files(..)
+    , Type, none, stage, stagep, type_fusing_p, type_extension, retype_file
 
     -- * Transformations
     , Tool(..), exec_tool, ToolKind, notool, ToolActionEither, ToolActionSingle, ToolActionMulti
@@ -44,7 +44,7 @@ module Development.Ruin
 
 import GHC.Generics (Generic)
 
-import Control.Arrow ((***), (&&&))
+import Control.Arrow ((&&&))
 
 import Data.Hashable
 import Data.Char (toLower)
@@ -71,7 +71,7 @@ import Prelude.Unicode
 import System.Process (rawSystem)
 import System.Console.GetOpt (OptDescr(..), ArgDescr(..))
 import System.Path.Glob (glob)
-import System.Path.NameManip (dir_part, filename_part)
+-- import System.Path.NameManip (dir_part, filename_part)
 
 import System.Process (readProcess, readProcessWithExitCode)
 
@@ -144,6 +144,8 @@ instance (Out a, Out b) ⇒ Out (HashMap a b) where
 --- Source & result specification
 class (Eq a, Hashable a, Out a, Show a, Typeable a) ⇒ Type a where
     none           ∷ a
+    stage          ∷ String → a
+    stagep         ∷ a → Bool
     type_fusing_p  ∷ a → Bool
     type_extension ∷ a → String
 
