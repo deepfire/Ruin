@@ -173,7 +173,7 @@ instance (Out a, Out b) ⇒ Out (OS a b) where
 instance Eq  (OS a b) where -- treat Nothing as a wildcard during comparison:
     (OS t1 Nothing) == (OS t2 _)       = t1 ≡ t2
     (OS t1 _)       == (OS t2 Nothing) = t1 ≡ t2
-    (OS t1 v1)      == (OS t2 v2)      = t1 ≡ t2 && v1 ≡ v2
+    (OS t1 v1)      == (OS t2 v2)      = t1 ≡ t2 ∧ v1 ≡ v2
 
 data Plat a b c where
     Plat ∷ (Arch a, OSType b, OSVersion c) ⇒ a → OS b c → Plat a b c
@@ -184,7 +184,7 @@ instance (Out a, Out b, Out c) ⇒ Out (Plat a b c) where
   doc (Plat arch os) = doc arch <> text "-" <> doc os
   docPrec _ = doc
 instance Eq  (Plat a b c) where
-    (Plat a1 os1)   == (Plat a2 os2)   = a1 ≡ a2 && os1 ≡ os2
+    Plat a1 os1 == Plat a2 os2 = a1 ≡ a2 ∧ os1 ≡ os2
 
 
 --- Source → target transformation
@@ -212,7 +212,7 @@ exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for
          , (on, for, tool_exec)                          ← tool_variants
          , -- trace (printf "try %s<>%s %s<>%s %s<>%s %s<>%s %s<>%s"
            --               (show toolkind) (show want_toolkind) (show tyfrom) (show want_tyfrom) (show tyto) (show want_tyto) (show on) (show this_plat) (show for) (show for_plat)) $
-           toolkind ≡ want_toolkind && tyfrom ≡ want_tyfrom && tyto ≡ want_tyto && on ≡ this_plat && for ≡ for_plat ] of
+           toolkind ≡ want_toolkind ∧ tyfrom ≡ want_tyfrom ∧ tyto ≡ want_tyto ∧ on ≡ this_plat ∧ for ≡ for_plat ] of
       []  → error (printf "Failed to find a suitable tool: (%s←%s) on-plat=%s to-plat=%s" (show want_tyto) (show want_tyfrom) (show this_plat) (show for_plat))
       (Tool toolkind _ _ _ fnV, tool_exec):_ →
           case (fnV, ins) of
@@ -244,15 +244,15 @@ instance (Show a, Show b) ⇒ Show (ChainLink a b) where
 class (Eq a, Hashable a, Out a, Show a, Generic a) ⇒ Tag a
 
 data CtxExp a b c d e where -- tag tkind arch osty osv
-    AsPartOf  ∷ (Tag a, Generic a) ⇒ a → CtxExp a b c d e
-    ForArch   ∷ (Tag a, Arch c) ⇒ c → CtxExp a b c d e
-    ForOSType ∷ (Tag a, OSType d) ⇒ d → CtxExp a b c d e
-    ForOS     ∷ (Tag a, OSType d) ⇒ OS d e → CtxExp a b c d e
-    ForPlat   ∷ (Tag a) ⇒ Plat c d e → CtxExp a b c d e
-    ForInput  ∷ (Tag a, Generic a) ⇒ String → CtxExp a b c d e -- Filename wildcard
-    WithTool  ∷ (Tag a, ToolKind b) ⇒ b → CtxExp a b c d e
-    ShellTest ∷ (Tag a, Generic a) ⇒ String → String → CtxExp a b c d e -- WARNING: the command is expected to be pure!
-    ExecTest  ∷ (Tag a, Generic a) ⇒ String → [String] → String → CtxExp a b c d e -- WARNING: ^^^
+    AsPartOf  ∷ (Tag a, Generic a) ⇒ a → CtxExp a b c d e                          -- ^ In the context of building under a specific Tag.
+    ForArch   ∷ (Tag a, Arch c) ⇒ c → CtxExp a b c d e                             -- ^ During build for a given Arch.
+    ForOSType ∷ (Tag a, OSType d) ⇒ d → CtxExp a b c d e                           -- ^ During build for a given OS.
+    ForOS     ∷ (Tag a, OSType d) ⇒ OS d e → CtxExp a b c d e                      -- ^ During build for a specific OS version.
+    ForPlat   ∷ (Tag a) ⇒ Plat c d e → CtxExp a b c d e                            -- ^ During build for a given Platform.
+    ForInput  ∷ (Tag a, Generic a) ⇒ String → CtxExp a b c d e                     -- ^ For sources matching a wildcard.
+    WithTool  ∷ (Tag a, ToolKind b) ⇒ b → CtxExp a b c d e                         -- ^ While being transformed by a specific ToolKind.
+    ShellTest ∷ (Tag a, Generic a) ⇒ String → String → CtxExp a b c d e            -- ^ When output of a pure shell command matches a provided string.
+    ExecTest  ∷ (Tag a, Generic a) ⇒ String → [String] → String → CtxExp a b c d e -- ^ When output of a pure executable run matches a provided string.
     Not       ∷ (Tag a, Generic a) ⇒ (CtxExp a b c d e) → CtxExp a b c d e
     And       ∷ (Tag a, Generic a) ⇒ [CtxExp a b c d e] → CtxExp a b c d e
     Or        ∷ (Tag a, Generic a) ⇒ [CtxExp a b c d e] → CtxExp a b c d e
@@ -300,21 +300,20 @@ ctxval_xfp   _            = False
 
 -- newtype ΞMap tk ty = ΞMap (HashMap (CtxVal ty) (Chain tk ty))
 
-data Inputs ty =
-    Srcs ty String [String]              | -- type srcRoot wildcards-as-per-System.Path.Glob
-    Comp String                          | -- component nesting
-    Gen  ty String (String → Action ())
+data Inputs ty
+    = Srcs ty String [String]              -- ^ Tool-transformable input files (aka "sources"); Second argument is common root, third is wildcards-as-per-System.Path.Glob
+    | Comp String                          -- ^ Component nesting, by name;  note that 'Comp' can't refer to ToolComponents.
+    | Gen  ty String (String → Action ())  -- ^ Arbitrary, command-generated leaves.
     deriving (Show, Generic)
 instance Eq ty ⇒ Eq (Inputs ty) where
-    (Srcs ty1 d1 fs1) == (Srcs ty2 d2 fs2) = ty1 ≡ ty2 && d1 ≡ d2 && fs1 ≡ fs2
+    (Srcs ty1 d1 fs1) == (Srcs ty2 d2 fs2) = ty1 ≡ ty2 ∧ d1 ≡ d2 ∧ fs1 ≡ fs2
     (Comp cn1)        == (Comp cn2)        = cn1 ≡ cn2
-    (Gen  ty1 f1 _)   == (Gen  ty2 f2 _)   = ty1 ≡ ty2 && f1 ≡ f2 -- XXX: is this a bug source?
+    (Gen  ty1 f1 _)   == (Gen  ty2 f2 _)   = ty1 ≡ ty2 ∧ f1 ≡ f2 -- XXX: is this a bug source?
     _                 == _                 = False
 instance Hashable ty ⇒ Hashable (Inputs ty) where
     hashWithSalt s (Srcs a b c)  = s `hashWithSalt` (hash a) `hashWithSalt` (hash b) `hashWithSalt` (hash c)
     hashWithSalt s (Comp a)      = s `hashWithSalt` (hash a)
     hashWithSalt s (Gen  a b _)  = s `hashWithSalt` (hash a) `hashWithSalt` (hash b)
-
 
 data Files a =
     Files     a String [String]   -- type srcRoot wildcards-as-per-System.Path.Glob
@@ -345,10 +344,10 @@ eval_CtxExp tag plat@(Plat arch os@(OS ostype _)) tkind mFilename expr =
 
 -- BuildVar:  parametrization atom
 --
-data BuildVar =
-    Var String      |
-    List [String]   |
-    Flag Bool
+data BuildVar
+    = Var String        -- ^ Simple string-valued variable
+    | List [String]     -- ^ List of strings.
+    | Flag Bool         -- ^ Boolean flag variable.
     deriving (Eq, Show)
 
 var_stringify ∷ String → BuildVar → String
@@ -544,7 +543,7 @@ match_buildable buildables compname tag plat =
       x : _ → x
     where results = [ b
                       | b@(Buildable _ comp _ btag sliceplat _ _) ← buildables
-                      , (cName comp) ≡ compname && sliceplat ≡ plat && btag ≡ (fromMaybe btag tag) ]
+                      , (cName comp) ≡ compname ∧ sliceplat ≡ plat ∧ btag ≡ (fromMaybe btag tag) ]
 
 component_type :: (ChainName cn, Type ty) => ChainMap cn ty tk -> Component a cn tk ty e f g -> ty
 component_type (ChainMap chmap) (Component _ chname _ _ _ _) = ty where (Chain ty _ _) = chmap ! chname
@@ -571,7 +570,7 @@ type ChainLinkConsCtx = (String, Int, Int)
                   let inp_ty   = input_type compmap chains inp,
                   inp_ty ≡ thisty,
                   f            ← case inp of
-                                   Comp cname       → [buildable_output $ match_buildable buildables cname Nothing to_plat]
+                                   Comp compname    → [buildable_output $ match_buildable buildables compname Nothing to_plat]
                                    Gen  _ outf _    → [outf]
                                    Srcs ty bas pats → concat $ map expand_pattern pats
                                        where expand_pattern p = unsafePerformIO $ glob $ bas </> p ++ type_extension ty ]
@@ -592,7 +591,7 @@ do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (clink_name, de
                           else let intrep = [ do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (id_step i) ctx_top chain (on_plat, to_plat) tool_XIRmap thisty outdir
                                             | (i, chain) ← zip [1..] children_chains ]
                                    intrep        ∷ [([(Inputs ty, ChainLink ty tkind)], [(Inputs ty, ChainLink ty tkind)])]
-                               in mconcat intrep ∷  ([(Inputs ty, ChainLink ty tkind)], [(Inputs ty, ChainLink ty tkind)])-- trace (if all )
+                               in mconcat intrep ∷  ([(Inputs ty, ChainLink ty tkind)], [(Inputs ty, ChainLink ty tkind)])
     in
     (-- accumulate promotable results from leaf processing and subchains
      upward_acc ++ let res = filter (if | depth ≡ 0 → const False
