@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, DataKinds, DeriveDataTypeable, DeriveGeneric, ExtendedDefaultRules, GADTs, KindSignatures, MultiWayIf, ScopedTypeVariables, StandaloneDeriving, TransformListComp, TupleSections, QuasiQuotes, UnicodeSyntax, ViewPatterns #-}
+{-# LANGUAGE ConstraintKinds, DataKinds, DeriveDataTypeable, DeriveGeneric, ExtendedDefaultRules, FlexibleContexts, GADTs, KindSignatures, MultiWayIf, RankNTypes, ScopedTypeVariables, StandaloneDeriving, TransformListComp, TupleSections, TypeFamilies, QuasiQuotes, UndecidableInstances, UnicodeSyntax, ViewPatterns #-}
 
 -- | A module for declarative definition of complex build systems.
 -- Ruin tries to provide the build system engineer with a language closer to what
@@ -10,6 +10,9 @@ module Development.Ruin
       LocationKind(..), LFixed(..), LGeneric(..)
     , SysExec(..), BuildableExec(..)
     , Path(..) 
+
+    -- * The Build System Type
+    , Build
 
     -- * Target environment
     , Arch, OS(..), OSType, OSVersion, Plat(..)
@@ -25,7 +28,7 @@ module Development.Ruin
 
     -- * Context
     , Ctx, CtxExp(..), CtxVal(..)
-    , CtxMap(..)
+    , CtxMap(..), XQuery(..)
     , ctxR, ctxN, ctxRCase, ctxNCase, ctxRIf, ctxNIf, ctxRWhen, ctxNWhen
 
     -- * Components
@@ -48,6 +51,7 @@ module Development.Ruin
     ) where
 
 import GHC.Generics (Generic)
+import GHC.Prim
 
 import Control.Arrow ((&&&))
 
@@ -166,70 +170,74 @@ data SysExec =
     deriving (Eq, Generic, Show)
 instance LocationKind (SysExec) where
     resolve (SysExec name) = LFixed $ "/usr/bin" </> name
-              
+
+
+--- One to Bind Them All:
+type family   BC a :: Constraint
+type instance BC a = (Eq a, Generic a, Hashable a, Show a, Typeable a)
+
+class (BC (Type a), BC (Arch a), BC (OSType a), BC (OSVersion a), BC (ToolKind a), BC (ChainName a), BC (Tag a))
+    ⇒ Build a where
+    data Type a      ∷ *
+    none             ∷ Type a
+    stage            ∷ String → Type a
+    stagep           ∷ Type a → Bool
+    type_fusing_p    ∷ Type a → Bool
+    type_extension   ∷ Type a → String
+    data Arch a      ∷ *
+    data OSType a    ∷ *
+    os_execsuffix    ∷ OSType a → String
+    data OSVersion a ∷ *
+    data ToolKind a  ∷ *
+    notool           ∷ ToolKind a
+    data ChainName a ∷ *
+    data Tag a       ∷ *
+
+deriving instance Typeable (Arch)
+deriving instance Typeable (ChainName)
+deriving instance Typeable (OSType)
+deriving instance Typeable (OSVersion)
+deriving instance Typeable (Tag)
+deriving instance Typeable (ToolKind)
+deriving instance Typeable (Type)
+
 
 --- Source & result specification
-class (Eq a, Hashable a, Out a, Show a, Typeable a) ⇒ Type a where
-    none           ∷ a
-    stage          ∷ String → a
-    stagep         ∷ a → Bool
-    type_fusing_p  ∷ a → Bool
-    type_extension ∷ a → String
 
-retype_file ∷ Type a ⇒ a → String → String
+retype_file ∷ (Build a) ⇒ Type a → String → String
 retype_file newty f = f -<.> type_extension newty
 
 
 --- Target specification
-class (Eq a, Show a, Generic a, Out a, Hashable a) ⇒ Arch a
-class (Eq a, Show a, Generic a, Out a, Hashable a) ⇒ OSType a where
-    os_execsuffix ∷ a → String
-class (Eq a, Show a, Generic a, Out a, Hashable a) ⇒ OSVersion a
+data OS a where
+    OS ∷ (Build a) ⇒ OSType a → Maybe (OSVersion a) → OS a
 
-data OS a b where
-    OS ∷ (OSType a, OSVersion b) ⇒ a → (Maybe b) → OS a b
-
-deriving instance Show (OS a b)
-instance Hashable (OS a b) where
-     hashWithSalt s (OS x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
-instance (Out a, Out b) ⇒ Out (OS a b) where
-  doc (OS ostype osver) = doc ostype <> text "-" <> case osver of
-                                                      Nothing  → text "*-*"
-                                                      Just ver → doc ver
-  docPrec _ = doc
-instance Eq  (OS a b) where -- treat Nothing as a wildcard during comparison:
+deriving instance Show (OS a)
+instance Hashable (OS a) where
+    hashWithSalt s (OS x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
+instance Eq  (OS a) where -- treat Nothing as a wildcard during comparison:
     (OS t1 Nothing) == (OS t2 _)       = t1 ≡ t2
     (OS t1 _)       == (OS t2 Nothing) = t1 ≡ t2
     (OS t1 v1)      == (OS t2 v2)      = t1 ≡ t2 ∧ v1 ≡ v2
 
-data Plat a b c where
-    Plat ∷ (Arch a, OSType b, OSVersion c) ⇒ a → OS b c → Plat a b c
-deriving instance Show (Plat a b c)
-instance Hashable (Plat a b c) where
-     hashWithSalt s (Plat x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
-instance (Out a, Out b, Out c) ⇒ Out (Plat a b c) where
-  doc (Plat arch os) = doc arch <> text "-" <> doc os
-  docPrec _ = doc
-instance Eq  (Plat a b c) where
+data Plat a where
+    Plat ∷ Build a ⇒ Arch a → OS a → Plat a
+deriving instance Show (Plat a)
+instance Hashable (Plat a) where
+    hashWithSalt s (Plat x y)  = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
+instance Eq  (Plat a) where
     Plat a1 os1 == Plat a2 os2 = a1 ≡ a2 ∧ os1 ≡ os2
 
 
 --- Source → target transformation
-class (Eq a, Generic a, Hashable a, Ord a, Out a, Show a, Typeable a) ⇒ ToolKind a where
-    notool ∷ ToolKind a ⇒ a
-
 type ToolAction        = String → [String] → [String] → Action ()
 type ToolActionSimple  = String → [String] →            Action () -- a flagless option
 
-data Tool a b c d e =
-    Tool a b b [(Plat c d e, Plat c d e, String)] (String → ToolAction)
+data Tool a =
+    Tool (ToolKind a) (Type a) (Type a) [(Plat a, Plat a, String)] (String → ToolAction)
     deriving (Generic)
 
-instance (Out a, Out b) ⇒ Out (Tool a b c d e) where
-    doc (Tool kind fty toty _ _) = text "Tool" <+> parens (text "xform:" <+> doc fty <> text "→" <> doc toty <+> doc kind)
-    docPrec _ = doc
-
-exec_tool ∷ (ToolKind a, Type b) ⇒ [Tool a b c d e] → a → (b, b) → (Plat c d e, Plat c d e) → ToolAction
+exec_tool ∷ Build a ⇒ [Tool a] → ToolKind a → (Type a, Type a) → (Plat a, Plat a) → ToolAction
 exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for_plat) out ins flags =
     case [ ignt trace (printf "found %s %s→%s for %s" (show toolkind) (show tyfrom) (show tyto) out)
            (c, tool_exec)
@@ -246,42 +254,39 @@ exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for
 -- we need hints.
 -- A Chain is what provides these hints.
 
-class (Eq a, Hashable a, Out a, Show a) ⇒ ChainName a
 
-data Chain typ tkind where
-    Chain ∷ (Type typ, ToolKind tkind) ⇒ typ → tkind → [Chain typ tkind] → Chain typ tkind -- ProductType → ApplicableTool → Children
-deriving instance Eq (Chain typ tkind)
-deriving instance Show (Chain typ tkind)
-newtype ChainMap cn ty tk = ChainMap (HashMap cn (Chain ty tk))
+data Chain a where
+    Chain ∷ Build a ⇒ Type a → ToolKind a → [Chain a] → Chain a
+deriving instance Eq (Chain a)
+deriving instance Show (Chain a)
+newtype ChainMap a = ChainMap (HashMap (ChainName a) (Chain a))
 
-data ChainLink ty tkind =
-    ChainLink [String] ty String ty tkind (XQuery tkind ty) ToolAction
+data ChainLink a where
+    ChainLink ∷ Build a ⇒ [String] → Type a → String → Type a → ToolKind a → XQuery a → ToolAction → ChainLink a
 
-instance (Show a, Show b) ⇒ Show (ChainLink a b) where
+instance Show (ChainLink a) where
     show (ChainLink infs inty outf outty tkin _ _) = printf "#<LINK (%s<-%s) %s: %s ← %s" (show outty) (show inty) (show tkin) (show outf) (show infs)
 
 
 -- A condition for extending the build environment
-class (Eq a, Hashable a, Out a, Show a, Generic a) ⇒ Tag a
+data CtxExp a where
+    AsPartOf  ∷ Build a ⇒ Tag a → CtxExp a                       -- ^ In the context of building under a specific Tag.
+    ForArch   ∷ Build a ⇒ Arch a → CtxExp a                      -- ^ During build for a given Arch.
+    ForOSType ∷ Build a ⇒ OSType a → CtxExp a                    -- ^ During build for a given OS.
+    ForOS     ∷ Build a ⇒ OS a → CtxExp a                        -- ^ During build for a specific OS version.
+    ForPlat   ∷ Build a ⇒ Plat a → CtxExp a                      -- ^ During build for a given Platform.
+    ForInput  ∷ Build a ⇒ String → CtxExp a                      -- ^ For sources matching a wildcard.
+    WithTool  ∷ Build a ⇒ ToolKind a → CtxExp a                  -- ^ While being transformed by a specific ToolKind.
+    ShellTest ∷ Build a ⇒ String → String → CtxExp a             -- ^ When output of a pure shell command matches a provided string.
+    ExecTest  ∷ Build a ⇒ String → [String] → String → CtxExp a  -- ^ When output of a pure executable run matches a provided string.
+    Not       ∷ Build a ⇒ CtxExp a → CtxExp a
+    And       ∷ Build a ⇒ [CtxExp a] → CtxExp a
+    Or        ∷ Build a ⇒ [CtxExp a] → CtxExp a
+    Always    ∷ Build a ⇒ CtxExp a
 
-data CtxExp a b c d e where -- tag tkind arch osty osv
-    AsPartOf  ∷ (Tag a, Generic a) ⇒ a → CtxExp a b c d e                          -- ^ In the context of building under a specific Tag.
-    ForArch   ∷ (Tag a, Arch c) ⇒ c → CtxExp a b c d e                             -- ^ During build for a given Arch.
-    ForOSType ∷ (Tag a, OSType d) ⇒ d → CtxExp a b c d e                           -- ^ During build for a given OS.
-    ForOS     ∷ (Tag a, OSType d) ⇒ OS d e → CtxExp a b c d e                      -- ^ During build for a specific OS version.
-    ForPlat   ∷ (Tag a) ⇒ Plat c d e → CtxExp a b c d e                            -- ^ During build for a given Platform.
-    ForInput  ∷ (Tag a, Generic a) ⇒ String → CtxExp a b c d e                     -- ^ For sources matching a wildcard.
-    WithTool  ∷ (Tag a, ToolKind b) ⇒ b → CtxExp a b c d e                         -- ^ While being transformed by a specific ToolKind.
-    ShellTest ∷ (Tag a, Generic a) ⇒ String → String → CtxExp a b c d e            -- ^ When output of a pure shell command matches a provided string.
-    ExecTest  ∷ (Tag a, Generic a) ⇒ String → [String] → String → CtxExp a b c d e -- ^ When output of a pure executable run matches a provided string.
-    Not       ∷ (Tag a, Generic a) ⇒ (CtxExp a b c d e) → CtxExp a b c d e
-    And       ∷ (Tag a, Generic a) ⇒ [CtxExp a b c d e] → CtxExp a b c d e
-    Or        ∷ (Tag a, Generic a) ⇒ [CtxExp a b c d e] → CtxExp a b c d e
-    Always    ∷ (Tag a, Generic a) ⇒ CtxExp a b c d e
-
-deriving instance (Tag a, ToolKind b, Arch c, OSType d, OSVersion e) ⇒ Eq (CtxExp a b c d e)
-deriving instance (Tag a, ToolKind b, Arch c, OSType d, OSVersion e) ⇒ Show (CtxExp a b c d e)
-instance Hashable (CtxExp a b c d e) where
+deriving instance Eq (CtxExp a)
+deriving instance Show (CtxExp a)
+instance Hashable (CtxExp a) where
      hashWithSalt s (AsPartOf x)     = s `hashWithSalt` (hash x)
      hashWithSalt s (ForArch x)      = s `hashWithSalt` (hash x)
      hashWithSalt s (ForOSType x)    = s `hashWithSalt` (hash x)
@@ -296,55 +301,63 @@ instance Hashable (CtxExp a b c d e) where
      hashWithSalt s (Or x)           = s `hashWithSalt` (hash x)
      hashWithSalt s Always           = s
 
--- An atom of build environment
-data CtxVal tk ty
-    = XFlags  (FlagType tk ty) [String]    -- ^ Flags added at the current point of context.
-    | XInputs (Inputs ty)                  -- ^ Inputs added at the current point of context.
-    deriving (Eq, Show, Generic, Typeable)
-instance (Hashable tk, Hashable ty) ⇒ Hashable (CtxVal tk ty)
+data FlagType a where
+    ForType ∷ Build a ⇒ Type a     → FlagType a  -- ^ For transforms employing tools of specified kind.
+    ForTool ∷ Build a ⇒ ToolKind a → FlagType a  -- ^ For non-fusing transforms: the source type must match;  for fusing transforms: the destination type must match.
+deriving instance Eq       (FlagType a)
+deriving instance Show     (FlagType a)
+deriving instance Typeable (FlagType)
+instance Hashable (FlagType a) where
+     hashWithSalt s (ForType x) = s `hashWithSalt` (hash x)
+     hashWithSalt s (ForTool x) = s `hashWithSalt` (hash x)
 
-type XQuery tk ty = (ty, String) → Bool → [CtxVal tk ty]
-
-data XIR tk ty where
-    XIR ∷ (Typeable tk, Generic tk, ToolKind tk, Type ty) ⇒ XQuery tk ty → CtxVal tk ty → XIR tk ty
-deriving instance (Typeable tk, Generic tk, ToolKind tk, Type ty) ⇒ Show (XIR tk ty)
-
-ctxval_ξp    ∷ CtxVal c d → Bool
-ctxval_ξp   (XInputs _ )  = True
-ctxval_ξp    _            = False
-ctxval_xfp   ∷ CtxVal c d → Bool
-ctxval_xfp  (XFlags _ _)  = True
-ctxval_xfp   _            = False
-
--- newtype ΞMap tk ty = ΞMap (HashMap (CtxVal ty) (Chain tk ty))
-
-data FlagType tk ty
-    = ForTool tk                           -- ^ For transforms employing tools of specified kind.
-    | ForType ty                           -- ^ For non-fusing transforms: the source type must match;  for fusing transforms: the destination type must match.
-    deriving (Eq, Generic, Typeable, Show)
-instance (Hashable tk, Hashable ty) ⇒ Hashable (FlagType tk ty)
-
-data Inputs ty
-    = Srcs ty String [String]              -- ^ Tool-transformable input files (aka "sources"); Second argument is common root, third is wildcards-as-per-System.Path.Glob
-    | Comp String                          -- ^ Component nesting, by name;  note that 'Comp' can't refer to ToolComponents.
-    | Gen  ty String (String → Action ())  -- ^ Arbitrary, command-generated leaves.
-    deriving (Show, Generic)
-instance Eq ty ⇒ Eq (Inputs ty) where
+data Inputs a where
+    Srcs ∷ Build a ⇒ Type a → String → [String]             → Inputs a  -- ^ Tool-transformable input files (aka "sources");
+                                                                         --    Second argument is common root, third is wildcards-as-per-System.Path.Glob
+    Comp ∷ Build a ⇒ String                                 → Inputs a  -- ^ Component nesting, by name;  note that 'Comp' can't refer to ToolComponents.
+    Gen  ∷ Build a ⇒ Type a → String → (String → Action ()) → Inputs a  -- ^ Arbitrary, command-generated leaves.
+deriving instance Show     (Inputs a)
+deriving instance Typeable (Inputs)
+instance Build a ⇒ Eq (Inputs a) where
     (Srcs ty1 d1 fs1) == (Srcs ty2 d2 fs2) = ty1 ≡ ty2 ∧ d1 ≡ d2 ∧ fs1 ≡ fs2
     (Comp cn1)        == (Comp cn2)        = cn1 ≡ cn2
     (Gen  ty1 f1 _)   == (Gen  ty2 f2 _)   = ty1 ≡ ty2 ∧ f1 ≡ f2 -- XXX: is this a bug source?
     _                 == _                 = False
-instance Hashable ty ⇒ Hashable (Inputs ty) where
+instance Build a ⇒ Hashable (Inputs a) where
     hashWithSalt s (Srcs a b c)  = s `hashWithSalt` (hash a) `hashWithSalt` (hash b) `hashWithSalt` (hash c)
     hashWithSalt s (Comp a)      = s `hashWithSalt` (hash a)
     hashWithSalt s (Gen  a b _)  = s `hashWithSalt` (hash a) `hashWithSalt` (hash b)
+
+-- An atom of build environment
+data CtxVal a where
+    XFlags  ∷ Build a ⇒ FlagType a → [String] → CtxVal a   -- ^ Flags added at the current point of context.
+    XInputs ∷ Build a ⇒ Inputs a              → CtxVal a   -- ^ Inputs added at the current point of context.
+deriving instance Eq       (CtxVal a)
+deriving instance Show     (CtxVal a)
+deriving instance Typeable (CtxVal)
+instance  Hashable (CtxVal a) where
+    hashWithSalt s (XFlags x y) = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
+    hashWithSalt s (XInputs x)  = s `hashWithSalt` (hash x)
+
+data XQuery a where
+    XQuery ∷ Build a ⇒ ((Type a, String) → Bool → [CtxVal a]) → XQuery a
+instance Show     (XQuery a) where
+    show (XQuery _) = "#<XQuery>"
+deriving instance Typeable (XQuery)
+
+data XIR a where
+    XIR ∷ Build a ⇒ XQuery a → CtxVal a → XIR a
+deriving instance Show     (XIR a)
+deriving instance Typeable (XIR)
+-- instance Hashable (XIR a) where
+--     hashWithSalt s (XIR _ y) = s `hashWithSalt` (hash y)
 
 data Files a =
     Files     a String [String]   -- type srcRoot wildcards-as-per-System.Path.Glob
     deriving (Eq, Show, Generic)
 instance Hashable a ⇒ Hashable (Files a)
 
-eval_CtxExp ∷ (ToolKind tkind, Type ty) ⇒ tag → Plat arch osty osv → tkind → Maybe (ty, String) → CtxExp tag tkind arch osty osv → Bool
+eval_CtxExp ∷ Build a ⇒ Tag a → Plat a → ToolKind a → Maybe (Type a, String) → CtxExp a → Bool
 eval_CtxExp tag plat@(Plat arch os@(OS ostype _)) tkind mFilename expr =
     case expr of
       AsPartOf     expTag       → expTag    ≡ tag
@@ -379,8 +392,8 @@ var_stringify name (Var s)   = printf "--%s '%s'" name s
 var_stringify name (List ss) = printf "--%s '%s'" name $ intercalate " " ss
 var_stringify name (Flag f)  = if f then "--" ++ name else ""
 
-newtype VarMap  = VarMap (HashMap String BuildVar)
-newtype VarEnv = VarEnv (String → BuildVar, String → String, String → [String], String → Bool)
+newtype VarMap  = VarMap  (HashMap String BuildVar)
+newtype VarEnv  = VarEnv  (String → BuildVar, String → String, String → [String], String → Bool)
 newtype VarSpec = VarSpec (VarEnv → VarMap)
 
 make_varenv ∷ (String → Maybe BuildVar) → VarEnv
@@ -426,24 +439,26 @@ derive_optdescrs optspecs =
 --   represents the sum of contexts of all parents, plus the context for the first
 --   matching case branch
 
-data Ctx tag tkind ty arch osty osv =
-    Ctx
-    [Either String (Ctx tag tkind ty arch osty osv)] -- parent names
-    [(CtxExp tag tkind arch osty osv, [CtxVal tkind ty])]  -- cases
-    deriving (Eq, Show, Generic)
-instance (Hashable a, Hashable b, Hashable c, Hashable d, Hashable e, Hashable f) ⇒ Hashable (Ctx a b c d e f)
-newtype CtxMap tag tk ty arch osty osv = CtxMap (HashMap String (Ctx tag tk ty arch osty osv))
+data Ctx a where
+    Ctx ∷ Build a
+           ⇒ [Either String (Ctx a)]   -- ^ Parent context node names.
+           → [(CtxExp a, [CtxVal a])]  -- ^ Constituent cases.
+           → Ctx a
+deriving instance Eq       (Ctx a)
+deriving instance Show     (Ctx a)
+instance Hashable (Ctx a) where
+    hashWithSalt s (Ctx x y) = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
+newtype CtxMap a = CtxMap (HashMap String (Ctx a))
 
-make_xquery ∷ (Tag tag, ToolKind tkind, Type ty, Arch arch, OSType osty, OSVersion osv) ⇒
-               CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind → Ctx tag tkind ty arch osty osv → XQuery tkind ty
+make_xquery ∷ Build a ⇒ CtxMap a → Tag a → Plat a → ToolKind a → Ctx a → XQuery a
 make_xquery ctxmap tag plat tkind ctx =
-    xquery
+    XQuery xquery
     where xquery ty_f explainp = map fromRight $ eval_Ctx ctxmap tag plat tkind (Just ty_f) explainp ctx
 
-eval_Ctx ∷ (Arch arch, OSType osty, OSVersion osv, Tag tag, ToolKind tkind, Type ty) ⇒
-            CtxMap tag tkind ty arch osty osv → tag → Plat arch osty osv → tkind →     -- context (general, not Ctx sense)
-            Maybe (ty, String) → Bool →                                                -- record context, turn on explanation mode
-            Ctx tag tkind ty arch osty osv → [Either (XIR tkind ty) (CtxVal tkind ty)] -- argument → return value
+eval_Ctx ∷ ∀ a . Build a
+             ⇒ CtxMap a → Tag a → Plat a → ToolKind a     -- context (general, not Ctx sense)
+             → Maybe (Type a, String) → Bool              -- stage specifier, turn on explanation mode
+             → Ctx a → [Either (XIR a) (CtxVal a)]        -- argument → return value
 eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
     ret
     where (_, ret)  = eval (HS.empty, []) (Right ctx_top)
@@ -466,6 +481,9 @@ eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
                                    Nothing       → (\val → Left $ XIR xquery val,         ctxval_ξp)
                                         where xquery = make_xquery cxm tag plat tool this
                                    Just (ty, _)  → (\val → Right $ val,                   ctxval_xflags_matchp ty tool)
+                         ctxval_ξp                    (XInputs _ )            = True
+                         ctxval_ξp                    _                       = False
+                         ctxval_xflags_matchp ∷ Build a ⇒ Type a → ToolKind a → CtxVal a → Bool
                          ctxval_xflags_matchp xty _   (XFlags (ForType ty) _) = xty ≡ ty
                          ctxval_xflags_matchp _   xto (XFlags (ForTool to) _) = xto ≡ to
                          ctxval_xflags_matchp _   _   _                       = False
@@ -473,35 +491,35 @@ eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
                          res   = foldl eval (HS.insert this seen, added ++ acc) parents
 
 -- syntactic sugar for pretty Ctx creation.  Might go unused at some point.
-ctxR ∷ Tag a ⇒ [CtxVal c d] → Ctx a c d e f g
+ctxR ∷ Build a ⇒ [CtxVal a] → Ctx a
 ctxR vals =
     Ctx [] [(Always, vals)]
 
-ctxRWhen ∷ Tag a ⇒ CtxExp a c e f g → [CtxVal c d] → Ctx a c d e f g
+ctxRWhen ∷ Build a ⇒ CtxExp a → [CtxVal a] → Ctx a
 ctxRWhen expr vals =
     Ctx [] [(expr, vals)]
 
-ctxRIf ∷ Tag a ⇒ CtxExp a c e f g → [CtxVal c d] → [CtxVal c d] → Ctx a c d e f g
+ctxRIf ∷ Build a ⇒ CtxExp a → [CtxVal a] → [CtxVal a] → Ctx a
 ctxRIf expr thens elses =
     Ctx [] $ [(expr, thens)] ++ [(Always, elses)]
 
-ctxRCase ∷ Tag a ⇒ [(CtxExp a c e f g, [CtxVal c d])] → [CtxVal c d] → Ctx a c d e f g
+ctxRCase ∷ Build a ⇒ [(CtxExp a, [CtxVal a])] → [CtxVal a] → Ctx a
 ctxRCase cases elses =
     Ctx [] $ cases ++ [(Always, elses)]
 
-ctxN ∷ Tag a ⇒ [String] → [CtxVal c d] → Ctx a c d e f g
+ctxN ∷ Build a ⇒ [String] → [CtxVal a] → Ctx a
 ctxN parents vals =
     Ctx (map Left parents) [(Always, vals)]
 
-ctxNWhen ∷ Tag a ⇒ [String] → CtxExp a c e f g → [CtxVal c d] → Ctx a c d e f g
+ctxNWhen ∷ Build a ⇒ [String] → CtxExp a → [CtxVal a] → Ctx a
 ctxNWhen parents expr vals =
     Ctx (map Left parents) [(expr, vals)]
 
-ctxNIf ∷ Tag a ⇒ [String] → CtxExp a c e f g → [CtxVal c d] → [CtxVal c d] → Ctx a c d e f g
+ctxNIf ∷ Build a ⇒ [String] → CtxExp a → [CtxVal a] → [CtxVal a] → Ctx a
 ctxNIf parents expr thens elses =
     Ctx (map Left parents) $ [(expr, thens)] ++ [(Always, elses)]
 
-ctxNCase ∷ Tag a ⇒ [String] → [(CtxExp a c e f g, [CtxVal c d])] → [CtxVal c d] → Ctx a c d e f g
+ctxNCase ∷ Build a ⇒ [String] → [(CtxExp a, [CtxVal a])] → [CtxVal a] → Ctx a
 ctxNCase parents cases elses =
     Ctx (map Left parents) $ cases ++ [(Always, elses)]
 
@@ -516,38 +534,38 @@ ctxNCase parents cases elses =
 --
 -- NOTE: we don't need to specify the Chain name here, as it seems derivable
 --
-data Component a b c d e f g =
+data Component a =
     Component {
       cName            ∷ String,
-      cChainName       ∷ b,
-      cTags            ∷ [a],
+      cChainName       ∷ ChainName a,
+      cTags            ∷ [Tag a],
       cCtxNames        ∷ [String],
-      cAlways          ∷ [CtxVal c d],
-      cCases           ∷ [(CtxExp a c e f g, [CtxVal c d])]
+      cAlways          ∷ [CtxVal a],
+      cCases           ∷ [(CtxExp a, [CtxVal a])]
     } |
     ToolComponent {
-      cToolName        ∷ c,
-      cChainName       ∷ b,
-      cTags            ∷ [a],
+      cToolName        ∷ ToolKind a,
+      cChainName       ∷ ChainName a,
+      cTags            ∷ [Tag a],
       cCtxNames        ∷ [String],
-      cAlways          ∷ [CtxVal c d],
-      cCases           ∷ [(CtxExp a c e f g, [CtxVal c d])]
+      cAlways          ∷ [CtxVal a],
+      cCases           ∷ [(CtxExp a, [CtxVal a])]
     } |
     Target {
       cName            ∷ String,
-      cTags            ∷ [a],
-      cType            ∷ d,
+      cTags            ∷ [Tag a],
+      cType            ∷ Type a,
       cFile            ∷ String, -- Source
       cDeps            ∷ [String],
       cAction          ∷ ToolActionSimple
     }
-    deriving (Show)
 
-newtype CompMap a b c d e f g = CompMap (HashMap String (Component a b c d e f g))
+newtype CompMap a = CompMap (HashMap String (Component a))
 
-input_type (CompMap comap) chains inp =
+input_type ∷ Build a ⇒ CompMap a → ChainMap a → Inputs a → Type a
+input_type (CompMap comap) chainmap inp =
     case inp of
-      Comp cname       → component_type chains $ comap ! cname
+      Comp cname       → component_type chainmap $ comap ! cname
       Gen  ty _ _      → ty
       Srcs ty _ _      → ty
 
@@ -560,57 +578,54 @@ input_type (CompMap comap) chains inp =
 --
 --  ..hence a Buildable is a <Component * Kind * Slice> product.
 --
-data Buildable a b c d e f g where
-    Buildable ∷ (Tag a, ChainName b, ToolKind c, Type d, Arch e, OSType f, OSVersion g) ⇒ {
+data Buildable a where
+    Buildable ∷ {
         bName       ∷ String,
-        bComponent  ∷ Component a b c d e f g,
-        bCtx        ∷ Ctx a c d e f g,
-        bTag        ∷ a,
-        bPlat       ∷ Plat e f g,
+        bComponent  ∷ Component a,
+        bCtx        ∷ Ctx a,
+        bTag        ∷ Tag a,
+        bPlat       ∷ Plat a,
         bPath       ∷ String,
-        bOutFiles   ∷ HashMap String (ChainLink d c, Buildable a b c d e f g)
-    } → Buildable a b c d e f g
+        bOutFiles   ∷ HashMap String (ChainLink a, Buildable a)
+    } → Buildable a
 
-data BuildableExec a b c d e f g =
-    BuildableExec (Buildable a b c d e f g)
+data BuildableExec a =
+    BuildableExec (Buildable a)
     deriving (Generic)
-instance LocationKind (BuildableExec a b c d e f g) where
+instance LocationKind (BuildableExec a) where
     resolve (BuildableExec bble) = LFixed $ buildable_output bble
 
-match_buildable ∷ (Tag a, Arch e, OSType f, OSVersion g) ⇒ [Buildable a b c d e f g] → String → (Maybe a) → Plat e f g → Buildable a b c d e f g
+match_buildable ∷ Build a ⇒ [Buildable a] → String → Maybe (Tag a) → Plat a → Buildable a
 match_buildable buildables compname tag plat =
     case results of
-      []    → error $ printf "No buildable for:  comp=%s  plat=%s." compname (pretty plat)
+      []    → error $ printf "No buildable for:  comp=%s  plat=%s." compname (show plat)
       x : _ → x
     where results = [ b
                       | b@(Buildable _ comp _ btag sliceplat _ _) ← buildables
                       , (cName comp) ≡ compname ∧ sliceplat ≡ plat ∧ btag ≡ (fromMaybe btag tag) ]
 
-component_type :: (ChainName cn, Type ty) => ChainMap cn ty tk -> Component a cn tk ty e f g -> ty
+component_type ∷ Build a ⇒ ChainMap a → Component a → Type a
 component_type (ChainMap chmap) (Component _ chname _ _ _ _)     = ty where (Chain ty _ _) = chmap ! chname
 component_type (ChainMap chmap) (ToolComponent _ chname _ _ _ _) = ty where (Chain ty _ _) = chmap ! chname
 component_type _                (Target _ _ ty _ _ _)            = ty
 
-buildable_output ∷ Buildable a b c d e f g → String
+buildable_output ∷ Buildable a → String
 buildable_output (Buildable name (Component _ _ _ _ _ _) _ _     (Plat _ (OS osty _)) path _) = path </> name <.> os_execsuffix osty
 buildable_output (Buildable name (ToolComponent _ _ _ _ _ _) _ _ (Plat _ (OS osty _)) path _) = path </> name <.> os_execsuffix osty
 buildable_output (Buildable _    (Target _ _ _ file _ _) _ _ _ _ _)                           = file
 
 type ChainLinkConsCtx = (String, Int, Int)
 
-ξs_chainlinks :: (Tag tag, ChainName cname, ToolKind tkind, Type ty, Arch arch, OSType osty, OSVersion osv) =>
-                 CompMap tag cname tkind ty arch osty osv -> ChainMap cname ty tkind -> [Buildable tag cname toolkind ty arch osty osv] ->
-                 Plat arch osty osv -> ty -> [XIR tkind ty] ->
-                 [(Inputs ty, ChainLink ty tkind)]
--- ^ Compute chainlinks for a given set of XInputs (ξs)
-ξs_chainlinks compmap chains buildables to_plat thisty xirs =
+-- * Compute chainlinks for a given set of XInputs (ξs)
+ξs_chainlinks :: Build a ⇒ CompMap a → ChainMap a → [Buildable a] → Plat a → Type a → [XIR a] → [(Inputs a, ChainLink a)]
+ξs_chainlinks compmap chainmap buildables to_plat thisty xirs =
     cls
     where cls = [ (inp, ChainLink [] none f inp_ty notool xquery
                                $ case inp of
                                    Gen _ _ actn     → \out _ _ → actn out
                                    _                → \_ _ _   → return ())
                 | XIR xquery (XInputs inp)  ← xirs,
-                  let inp_ty   = input_type compmap chains inp,
+                  let inp_ty   = input_type compmap chainmap inp,
                   inp_ty ≡ thisty,
                   f            ← case inp of
                                    Comp compname    → [buildable_output $ match_buildable buildables compname Nothing to_plat]
@@ -618,10 +633,10 @@ type ChainLinkConsCtx = (String, Int, Int)
                                    Srcs ty bas pats → concat $ map expand_pattern pats
                                        where expand_pattern p = unsafePerformIO $ glob $ bas </> p ++ type_extension ty ]
 
-do_forge_chainlinks ∷ ∀ tag cname tkind ty arch osty osv . (Tag tag, ChainName cname, ToolKind tkind, Type ty, Arch arch, OSType osty, OSVersion osv) ⇒
-                      CompMap tag cname tkind ty arch osty osv → CtxMap tag tkind ty arch osty osv → [Buildable tag cname tkind ty arch osty osv] → ChainMap cname ty tkind → [Tool tkind ty arch osty osv] →
-                      tag → ChainLinkConsCtx → Ctx tag tkind ty arch osty osv → Chain ty tkind → (Plat arch osty osv, Plat arch osty osv) → H.HashMap tkind [XIR tkind ty] → ty → String →
-                       ([(Inputs ty, ChainLink ty tkind)], [(Inputs ty, ChainLink ty tkind)])
+do_forge_chainlinks ∷ ∀ a . Build a ⇒
+                    CompMap a → CtxMap a → [Buildable a] → ChainMap a → [Tool a] →
+                    Tag a → ChainLinkConsCtx → Ctx a → Chain a → (Plat a, Plat a) → HashMap (ToolKind a) [XIR a] → Type a → String →
+                    ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
 do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (clink_name, depth, idx) ctx_top (Chain thisty tool children_chains) (on_plat, to_plat) tool_XIRmap upwardty outdir =
     let id_step chidx    = (printf "%s.[%d]" clink_name idx, depth + 1, chidx)
         leafp            = null children_chains
@@ -633,8 +648,8 @@ do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (clink_name, de
                           then ([], ξs_chainlinks compmap chainmap buildables to_plat thisty (tool_XIRmap ! tool))
                           else let intrep = [ do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (id_step i) ctx_top chain (on_plat, to_plat) tool_XIRmap thisty outdir
                                             | (i, chain) ← zip [1..] children_chains ]
-                                   intrep        ∷ [([(Inputs ty, ChainLink ty tkind)], [(Inputs ty, ChainLink ty tkind)])]
-                               in mconcat intrep ∷  ([(Inputs ty, ChainLink ty tkind)], [(Inputs ty, ChainLink ty tkind)])
+                                   intrep        ∷ [([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])]
+                               in mconcat intrep ∷  ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
     in
     (-- accumulate promotable results from leaf processing and subchains
      upward_acc ++ let res = filter (if | depth ≡ 0 → const False
@@ -658,7 +673,10 @@ do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (clink_name, de
                                 | (ins, ChainLink _        _      infile  _        _    xquery _) ← upward_result,
                                   let outfile = (if leafp then outdir else "") </> retype_file upwardty infile ])
 
-forge_chainlinks ∷ (Tag a, ChainName b, ToolKind c, Type d, Arch e, OSType f, OSVersion g) ⇒ CompMap a b c d e f g → CtxMap a c d e f g → [Buildable a b c d e f g] → ChainMap b d c → [Tool c d e f g] → a → String → Ctx a c d e f g → Chain d c → (Plat e f g, Plat e f g) → H.HashMap c [XIR c d] → d → String → [ChainLink d c]
+forge_chainlinks ∷ Build a
+                     ⇒ CompMap a → CtxMap a → [Buildable a] → ChainMap a → [Tool a]
+                     → Tag a → String → Ctx a → Chain a → (Plat a, Plat a) → H.HashMap (ToolKind a) [XIR a] → Type a → String
+                     → [ChainLink a]
 forge_chainlinks compmap ctxmap bbles chainmap tools tag name ctx_top chain platxform tkind_XIRmap outtype outdir =
     let (acc, ret) = do_forge_chainlinks compmap ctxmap bbles chainmap tools tag (name, 0, 0) ctx_top chain platxform tkind_XIRmap outtype outdir
         res        = acc ++ ret
@@ -666,7 +684,7 @@ forge_chainlinks compmap ctxmap bbles chainmap tools tag name ctx_top chain plat
         inp_links  = H.fromListWith (++) $ (all_ins ++ map (fst &&& (:[]) ∘ snd) res)
         orphan_ins = H.filter null inp_links
     in if not $ H.null orphan_ins
-       then error (printf "Orphan inputs: %s" $ intercalate ", " $ map (\i → printf "%s :: %s" (show i) (show $ input_type compmap chainmap i) ∷ String) $ H.keys orphan_ins)
+       then error (printf "Orphan inputs: %s" $ intercalate ", " $ map (\i → printf "%s :: %s" (show i) (show $ input_type compmap chainmap i)) $ H.keys orphan_ins)
        else map snd res
 
 --   Slice∷
@@ -674,17 +692,16 @@ forge_chainlinks compmap ctxmap bbles chainmap tools tag name ctx_top chain plat
 --    - required target platforms
 --    - output path
 --
-data Slice a b c d =
-    Slice {
-      sliceKind  ∷ a,
-      slicePlats ∷ [(Plat b c d, String)]
-    } deriving (Eq, Show, Generic)
-instance (Tag a, Arch b, OSType c, OSVersion d) ⇒ Out (Slice a b c d)
+data Slice a where
+    Slice ∷ Build a ⇒ { sliceTag   ∷ Tag a
+                      , slicePlats ∷ [(Plat a, String)]
+                      } → Slice a
+deriving instance Show (Slice a)
 
-newtype Schema a b c d = Schema (HashMap a (Slice a b c d))
+newtype Schema a = Schema (HashMap (Tag a) (Slice a))
 
 -- | derive a unique name for the Buildable, according to the power of its Component's [Kind * Plat] product
-compute_buildable_name ∷ (Tag a, ToolKind c, Arch e) ⇒ Component a b c d e f g → e → a → Int → String
+compute_buildable_name ∷ Build a ⇒ Component a → Arch a → Tag a → Int → String
 compute_buildable_name comp arch tag slice_width =
     let product_name name tags = 
           if | length tags ≡ 1 ∧ slice_width ≡ 1 → name
@@ -696,9 +713,7 @@ compute_buildable_name comp arch tag slice_width =
          Component     cmName _ cmTags _ _ _ → product_name cmName cmTags
          ToolComponent cmName _ cmTags _ _ _ → product_name (lcShow cmName) cmTags
 
-component_ctx ∷ (Tag ta, ChainName cn, ToolKind tk, Type ty, Arch ar, OSType ot, OSVersion ov) ⇒
-                 Component ta cn tk ty ar ot ov → (Ctx ta tk ty ar ot ov, ar → ta → Int →
-                 CtxMap ta tk ty ar ot ov)
+component_ctx ∷  Build a ⇒ Component a → (Ctx a, Arch a → Tag a → Int → CtxMap a)
 component_ctx comp =
     let compctx parentCtxs always conds = (condsCtx, pre_ctxmap)
             where alwaysCtx = ctxN parentCtxs always
@@ -710,14 +725,13 @@ component_ctx comp =
          ToolComponent _ _ _ x y z → compctx x y z
          Target _ _ _ _ _ _        → (Ctx [] [], \_ _ _ → CtxMap H.empty)
 
-component_buildable ∷ (Tag a, ChainName b, ToolKind c, Type d, Arch e, OSType f, OSVersion g) ⇒
-                    Plat e f g → [Buildable a b c d e f g] → Component a b c d e f g →
-                    Ctx a c d e f g → a → Plat e f g → String →
-                    CompMap a b c d e f g → CtxMap a c d e f g → ChainMap b d c → [Tool c d e f g] → Int → Buildable a b c d e f g
+component_buildable ∷ ∀ a . Build a ⇒ Plat a → [Buildable a] → Component a → Ctx a → Tag a → Plat a → String → CompMap a → CtxMap a → ChainMap a → [Tool a] → Int
+                    → Buildable a
 component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outdir compmap ctxmap chainmap@(ChainMap chmap) tools slice_width =
     let compbble chain_name = b
             where b                           = Buildable name comp ctx_top tag for_plat outdir out_filemap
                   name                        = compute_buildable_name comp arch tag slice_width
+                  chtolis  ∷ (Type a → ToolKind a → b) → Chain a → [b]
                   chtolis f (Chain ty tk chs) = (f ty tk) : (concat $ map (chtolis f) chs)
                   chain_top@(Chain topty _ _) = chmap ! chain_name
                   tkinds                      = chtolis (\_ tk -> tk) chain_top
@@ -731,9 +745,9 @@ component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outd
       ToolComponent _ chain_name _ _ _ _ → compbble chain_name
       Target name _ ty file deps act     → b
           where b = Buildable name comp ctx_top tag for_plat outdir
-                    $ fromList [(file, (ChainLink deps ty file ty notool (\_ _ → []) (\out ins _ → act out ins), b))]
+                    $ fromList [(file, (ChainLink deps ty file ty notool (XQuery (\_ _ → [])) (\out ins _ → act out ins), b))]
 
-compute_buildables ∷ (Tag a, ChainName b, ToolKind c, Type d, Arch e, OSType f, OSVersion g) ⇒ Plat e f g → Schema a e f g → CompMap a b c d e f g → ChainMap b d c → [Tool c d e f g] → CtxMap a c d e f g → [Buildable a b c d e f g]
+compute_buildables ∷ Build a ⇒ Plat a → Schema a → CompMap a → ChainMap a → [Tool a] → CtxMap a → [Buildable a]
 compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chainmap tools (CtxMap ctxmap) =
     bbles
     where bbxms = [ (b, submap)
@@ -741,7 +755,7 @@ compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chainmap to
                   , tag                                              ← cTags comp
                   , let Slice _ compKindOuts  = case H.lookup tag schema of
                                                   Just s  → s
-                                                  Nothing → error $ printf "Build schema says nothing about kind %s.\nSchema: %s" (show tag) (pretty schema)
+                                                  Nothing → error $ printf "Build schema says nothing about kind %s.\nSchema: %s" (show tag) (show schema)
                         slice_width           = length compKindOuts
                         (ctx, pre_ctx_submap) = component_ctx comp
                   , (plat@(Plat arch _), outdir)                     ← compKindOuts
