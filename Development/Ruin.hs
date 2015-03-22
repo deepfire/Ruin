@@ -6,8 +6,13 @@
 
 module Development.Ruin
     (
+    -- * Location kinds & Path
+      LocationKind(..), LFixed(..), LGeneric(..)
+    , SysExec(..), BuildableExec(..)
+    , Path(..) 
+
     -- * Target environment
-      Arch, OS(..), OSType, OSVersion, Plat(..)
+    , Arch, OS(..), OSType, OSVersion, Plat(..)
     , os_execsuffix
 
     -- * Source, intermediate & destination file types
@@ -140,6 +145,28 @@ instance (Out a, Out b) ⇒ Out (HashMap a b) where
   doc hm = parens $ foldl (\acc (k, v) → acc $$ doc k <+> text ":" <+> doc v) (text "") $ toList hm
   docPrec _ = doc
 
+
+--- Path generalisation
+data LFixed = LFixed String deriving (Eq, Generic, Show)
+
+class LocationKind a where
+    resolve ∷ a → LFixed
+
+data LGeneric a where
+    LGen ∷ LocationKind a ⇒ String → a → LGeneric a
+
+deriving instance Eq a ⇒ Eq (LGeneric a)
+
+data Path a where
+    PFixed   ∷                  LFixed     → Path LFixed
+    PGeneric ∷ LocationKind b ⇒ LGeneric b → Path (LGeneric b)
+
+data SysExec =
+    SysExec String
+    deriving (Eq, Generic, Show)
+instance LocationKind (SysExec) where
+    resolve (SysExec name) = LFixed $ "/usr/bin" </> name
+              
 
 --- Source & result specification
 class (Eq a, Hashable a, Out a, Show a, Typeable a) ⇒ Type a where
@@ -535,6 +562,12 @@ data Buildable a b c d e f g where
         bPath       ∷ String,
         bOutFiles   ∷ HashMap String (ChainLink d c, Buildable a b c d e f g)
     } → Buildable a b c d e f g
+
+data BuildableExec a b c d e f g =
+    BuildableExec (Buildable a b c d e f g)
+    deriving (Generic)
+instance LocationKind (BuildableExec a b c d e f g) where
+    resolve (BuildableExec bble) = LFixed $ buildable_output bble
 
 match_buildable ∷ (Tag a, Arch e, OSType f, OSVersion g) ⇒ [Buildable a b c d e f g] → String → (Maybe a) → Plat e f g → Buildable a b c d e f g
 match_buildable buildables compname tag plat =
