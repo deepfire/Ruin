@@ -525,6 +525,14 @@ data Component a b c d e f g =
       cAlways          ∷ [CtxVal c d],
       cCases           ∷ [(CtxExp a c e f g, [CtxVal c d])]
     } |
+    ToolComponent {
+      cToolName        ∷ c,
+      cChainName       ∷ b,
+      cTags            ∷ [a],
+      cCtxNames        ∷ [String],
+      cAlways          ∷ [CtxVal c d],
+      cCases           ∷ [(CtxExp a c e f g, [CtxVal c d])]
+    } |
     Target {
       cName            ∷ String,
       cTags            ∷ [a],
@@ -579,12 +587,14 @@ match_buildable buildables compname tag plat =
                       , (cName comp) ≡ compname ∧ sliceplat ≡ plat ∧ btag ≡ (fromMaybe btag tag) ]
 
 component_type :: (ChainName cn, Type ty) => ChainMap cn ty tk -> Component a cn tk ty e f g -> ty
-component_type (ChainMap chmap) (Component _ chname _ _ _ _) = ty where (Chain ty _ _) = chmap ! chname
-component_type _                (Target _ _ ty _ _ _)        = ty
+component_type (ChainMap chmap) (Component _ chname _ _ _ _)     = ty where (Chain ty _ _) = chmap ! chname
+component_type (ChainMap chmap) (ToolComponent _ chname _ _ _ _) = ty where (Chain ty _ _) = chmap ! chname
+component_type _                (Target _ _ ty _ _ _)            = ty
 
 buildable_output ∷ Buildable a b c d e f g → String
-buildable_output (Buildable name (Component _ _ _ _ _ _) _ _ (Plat _ (OS osty _)) path _) = path </> name <.> os_execsuffix osty
-buildable_output (Buildable _    (Target _ _ _ file _ _) _ _ _ _ _)                       = file
+buildable_output (Buildable name (Component _ _ _ _ _ _) _ _     (Plat _ (OS osty _)) path _) = path </> name <.> os_execsuffix osty
+buildable_output (Buildable name (ToolComponent _ _ _ _ _ _) _ _ (Plat _ (OS osty _)) path _) = path </> name <.> os_execsuffix osty
+buildable_output (Buildable _    (Target _ _ _ file _ _) _ _ _ _ _)                           = file
 
 type ChainLinkConsCtx = (String, Int, Int)
 
@@ -674,43 +684,54 @@ instance (Tag a, Arch b, OSType c, OSVersion d) ⇒ Out (Slice a b c d)
 newtype Schema a b c d = Schema (HashMap a (Slice a b c d))
 
 -- | derive a unique name for the Buildable, according to the power of its Component's [Kind * Plat] product
-compute_buildable_name ∷ (Tag a, Arch e) ⇒ Component a b c d e f g → e → a → Int → String
-compute_buildable_name (Component cmName _ cmTags _ _ _) arch tag slice_width =
-    if | length cmTags ≡ 1 && slice_width ≡ 1 → cmName
-       | length cmTags ≡ 1                    → cmName ++ "-" ++ lcShow arch
-       |                      slice_width ≡ 1 → cmName ++ "-" ++ lcShow tag
-       | True                                 → cmName ++ "-" ++ lcShow tag  ++ "-" ++ lcShow arch
-compute_buildable_name (Target cmName _ _ _ _ _) _ _ _ = cmName
+compute_buildable_name ∷ (Tag a, ToolKind c, Arch e) ⇒ Component a b c d e f g → e → a → Int → String
+compute_buildable_name comp arch tag slice_width =
+    let product_name name tags = 
+          if | length tags ≡ 1 ∧ slice_width ≡ 1 → name
+             | length tags ≡ 1                   → name ++ "-" ++ lcShow arch
+             |                   slice_width ≡ 1 → name ++ "-" ++ lcShow tag
+             | True                              → name ++ "-" ++ lcShow tag  ++ "-" ++ lcShow arch
+    in case comp of
+         Target        cmName _ _      _ _ _ → cmName
+         Component     cmName _ cmTags _ _ _ → product_name cmName cmTags
+         ToolComponent cmName _ cmTags _ _ _ → product_name (lcShow cmName) cmTags
 
-component_ctx ∷ (Tag ta, ChainName cn, ToolKind tk, Type ty, Arch ar, OSType ot, OSVersion ov) ⇒ Component ta cn tk ty ar ot ov → (Ctx ta tk ty ar ot ov, ar → ta → Int → CtxMap ta tk ty ar ot ov)
-component_ctx comp@(Component _ _ _ parentCtxs always conds) =
-    (condsCtx, pre_ctxmap)
-    where alwaysCtx = ctxN parentCtxs always
-          condsCtx  = Ctx [Right alwaysCtx] conds
-          pre_ctxmap arch tag slice_width = CtxMap $ fromList [(name, condsCtx), (name ++ "-common", alwaysCtx)]
-              where name = compute_buildable_name comp arch tag slice_width
-component_ctx (Target _ _ _ _ _ _) = (Ctx [] [], \_ _ _ → CtxMap H.empty)
+component_ctx ∷ (Tag ta, ChainName cn, ToolKind tk, Type ty, Arch ar, OSType ot, OSVersion ov) ⇒
+                 Component ta cn tk ty ar ot ov → (Ctx ta tk ty ar ot ov, ar → ta → Int →
+                 CtxMap ta tk ty ar ot ov)
+component_ctx comp =
+    let compctx parentCtxs always conds = (condsCtx, pre_ctxmap)
+            where alwaysCtx = ctxN parentCtxs always
+                  condsCtx  = Ctx [Right alwaysCtx] conds
+                  pre_ctxmap arch tag slice_width = CtxMap $ fromList [(name, condsCtx), (name ++ "-common", alwaysCtx)]
+                      where name = compute_buildable_name comp arch tag slice_width
+    in case comp of
+         Component     _ _ _ x y z → compctx x y z
+         ToolComponent _ _ _ x y z → compctx x y z
+         Target _ _ _ _ _ _        → (Ctx [] [], \_ _ _ → CtxMap H.empty)
 
 component_buildable ∷ (Tag a, ChainName b, ToolKind c, Type d, Arch e, OSType f, OSVersion g) ⇒
                     Plat e f g → [Buildable a b c d e f g] → Component a b c d e f g →
                     Ctx a c d e f g → a → Plat e f g → String →
                     CompMap a b c d e f g → CtxMap a c d e f g → ChainMap b d c → [Tool c d e f g] → Int → Buildable a b c d e f g
-component_buildable this_plat bbles comp@(Component _ chain_name _ _ _ _) ctx_top tag for_plat@(Plat arch _) outdir compmap ctxmap chainmap@(ChainMap chmap) tools slice_width =
-    b
-    where b                           = Buildable name comp ctx_top tag for_plat outdir out_filemap
-          name                        = compute_buildable_name comp arch tag slice_width
-          chtolis f (Chain ty tk chs) = (f ty tk) : (concat $ map (chtolis f) chs)
-          chain_top@(Chain topty _ _) = chmap ! chain_name
-          tkinds                      = chtolis (\_ tk -> tk) chain_top
-          tkind_XIRmap                = H.fromList $ map (\tkind → (tkind, lefts $ eval_Ctx ctxmap tag for_plat tkind Nothing False ctx_top))
-                                                         tkinds
-          chainlinks                  = forge_chainlinks compmap ctxmap bbles chainmap tools tag name ctx_top chain_top (this_plat, for_plat) tkind_XIRmap topty outdir
-          out_filemap                 = fromList [ (outf, (clink, b))
-                                                 | clink@(ChainLink _ _ outf _ _ _ _) ← chainlinks ]
-component_buildable _ _ comp@(Target name _ ty file deps act) ctx tag plat outdir _ _ _ _ _ =
-    b
-    where b = Buildable name comp ctx tag plat outdir
-                        $ fromList [(file, (ChainLink deps ty file ty notool (\_ _ → []) (\out (Right ins) _ → act out ins), b))]
+component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outdir compmap ctxmap chainmap@(ChainMap chmap) tools slice_width =
+    let compbble chain_name = b
+            where b                           = Buildable name comp ctx_top tag for_plat outdir out_filemap
+                  name                        = compute_buildable_name comp arch tag slice_width
+                  chtolis f (Chain ty tk chs) = (f ty tk) : (concat $ map (chtolis f) chs)
+                  chain_top@(Chain topty _ _) = chmap ! chain_name
+                  tkinds                      = chtolis (\_ tk -> tk) chain_top
+                  tkind_XIRmap                = H.fromList $ map (\tkind → (tkind, lefts $ eval_Ctx ctxmap tag for_plat tkind Nothing False ctx_top))
+                                                                 tkinds
+                  chainlinks                  = forge_chainlinks compmap ctxmap bbles chainmap tools tag name ctx_top chain_top (this_plat, for_plat) tkind_XIRmap topty outdir
+                  out_filemap                 = fromList [ (outf, (clink, b))
+                                                         | clink@(ChainLink _ _ outf _ _ _ _) ← chainlinks ]
+    in case comp of
+      Component     _ chain_name _ _ _ _ → compbble chain_name
+      ToolComponent _ chain_name _ _ _ _ → compbble chain_name
+      Target name _ ty file deps act     → b
+          where b = Buildable name comp ctx_top tag for_plat outdir
+                    $ fromList [(file, (ChainLink deps ty file ty notool (\_ _ → []) (\out ins _ → act out ins), b))]
 
 compute_buildables ∷ (Tag a, ChainName b, ToolKind c, Type d, Arch e, OSType f, OSVersion g) ⇒ Plat e f g → Schema a e f g → CompMap a b c d e f g → ChainMap b d c → [Tool c d e f g] → CtxMap a c d e f g → [Buildable a b c d e f g]
 compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chainmap tools (CtxMap ctxmap) =
