@@ -554,14 +554,20 @@ component_name ∷ Build a ⇒ Component a → CompName a
 component_name (ToolComponent ton _ _ _ _ _) = Right ton
 component_name comp                          = Left $ cName comp
 
+lookup_component ∷ Build a ⇒ CompMap a → String → Component a
+lookup_component (CompMap comap) cname =
+    case H.lookup (Left cname) comap of
+      Nothing → error $ printf "Unknown component: %s" $ show cname
+      Just co → co
 
 type CompName a = Either String (ToolKind a)
 
 newtype CompMap a = CompMap (HashMap (CompName a) (Component a))
+
 input_type ∷ Build a ⇒ CompMap a → ChainMap a → Inputs a → Type a
-input_type (CompMap comap) chainmap inp =
+input_type comap chainmap inp =
     case inp of
-      Comp cname       → component_type chainmap $ comap ! cname
+      Comp cname       → component_type chainmap $ lookup_component comap cname
       Gen  ty _ _      → ty
       Srcs ty _ _      → ty
 
@@ -771,7 +777,7 @@ component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outd
     let compbble chain_name = b
             where b                           = Buildable name comp ctx_top tag for_plat outdir out_filemap
                   name                        = compute_buildable_name comp arch tag slice_width
-                  chtolis  ∷ (Type a → ToolKind a → b) → Chain a → [b]
+                  chtolis  ∷ (Type a → ToolKind a → ToolKind a) → Chain a → [ToolKind a]
                   chtolis f (Chain ty tk chs) = (f ty tk) : (concat $ map (chtolis f) chs)
                   chain_top@(Chain topty _ _) = chmap ! chain_name
                   tkinds                      = chtolis (\_ tk -> tk) chain_top
