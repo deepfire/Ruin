@@ -1,5 +1,4 @@
 name:                ruin
-id:                  ruin
 version:             0.1.0.0
 synopsis:            Higher-level build system DSL, atop Neil Mitchell's Shake.
 description:
@@ -10,7 +9,7 @@ description:
 
      - Platforms (Arch, OS)
      - Tools & tool pipelines
-            - Components
+     - Components
 
 license:             BSD2
 license-file:        LICENSE
@@ -24,7 +23,7 @@ cabal-version:       >=1.10
 
 bug-reports:         https://github.com/deepfire/Ruin/issues
 
-tested-with:         GHC==7.8.3, GHC==7.6.3
+tested-with:         GHC==7.8.4
 
 source-repository head
     type:     git
@@ -33,7 +32,7 @@ source-repository head
 library
   exposed-modules:     Development.Ruin
   -- other-modules:       
-  other-extensions:    DataKinds, DeriveGeneric, ExtendedDefaultRules, GADTs, KindSignatures, MultiWayIf, ScopedTypeVariables, StandaloneDeriving, QuasiQuotes, UnicodeSyntax, ViewPatterns
-  build-depends:       base >=4.7 && <4.8, base-unicode-symbols, containers, ghc-prim, hashable >=1.2 && <1.3, unordered-containers >=0.2 && <0.3, shake >=0.14 && <0.15, process >=1.2 && <1.3, MissingH >=1.3 && <1.4, GenericPretty >=1.2 && <1.3, pretty >=1.1 && <1.2, tuple > 0.3.0.0
+  other-extensions:    ConstraintKinds, DataKinds, DeriveDataTypeable, DeriveGeneric, ExtendedDefaultRules, FlexibleContexts, GADTs, KindSignatures, MultiWayIf, RankNTypes, ScopedTypeVariables, StandaloneDeriving, TransformListComp, TupleSections, TypeOperators, TypeFamilies, QuasiQuotes, UndecidableInstances, UnicodeSyntax, ViewPatterns
+  build-depends:       base >=4.7 && <4.8, base-unicode-symbols, containers, directory, ghc-prim, hashable >=1.2 && <1.3, unordered-containers >=0.2, shake >=0.15, process >=1.2 && <1.3, MissingH >=1.3 && <1.4, GenericPretty >=1.2 && <1.3, pretty >=1.1 && <1.2, tuple > 0.3.0.0
   -- hs-source-dirs:      
   default-language:    Haskell2010
