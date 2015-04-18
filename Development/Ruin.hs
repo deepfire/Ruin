@@ -616,6 +616,18 @@ buildable_output (Buildable _    (Target _ _ _ file _ _) _ _ _ _ _)             
 
 type ChainLinkConsCtx = (String, Int, Int)
 
+component_name_output ∷ Build a ⇒ [Buildable a] → Plat a → String → String
+component_name_output buildables to_plat compname =
+    buildable_output $ match_buildable buildables Nothing (Just to_plat) (Left compname) "during component lookup"
+
+ξ_files ∷ Build a ⇒ [Buildable a] → Plat a → Inputs a → [String]
+ξ_files buildables to_plat ξ =
+    case ξ of
+      Comp compname    → [component_name_output buildables to_plat compname]
+      Gen  _ outf _    → [outf]
+      Srcs ty bas pats → concat $ map expand_pattern pats
+          where expand_pattern p = unsafePerformIO $ glob $ bas </> p ++ type_extension ty
+
 -- * Compute chainlinks for a given set of XInputs (ξs)
 ξs_chainlinks ∷ Build a ⇒ CompMap a → ChainMap a → [Buildable a] → Plat a → Type a → [XIR a] → [(Inputs a, ChainLink a)]
 ξs_chainlinks compmap chainmap buildables to_plat thisty xirs =
@@ -627,11 +639,7 @@ type ChainLinkConsCtx = (String, Int, Int)
                 | XIR xquery (XInputs inp)  ← xirs,
                   let inp_ty   = input_type compmap chainmap inp,
                   inp_ty ≡ thisty,
-                  f            ← case inp of
-                                   Comp compname    → [buildable_output $ match_buildable buildables compname Nothing to_plat]
-                                   Gen  _ outf _    → [outf]
-                                   Srcs ty bas pats → concat $ map expand_pattern pats
-                                       where expand_pattern p = unsafePerformIO $ glob $ bas </> p ++ type_extension ty ]
+                  f                         ← ξ_files buildables to_plat inp ]
 
 do_forge_chainlinks ∷ ∀ a . Build a ⇒
                     CompMap a → CtxMap a → [Buildable a] → ChainMap a → [Tool a] →
