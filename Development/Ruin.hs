@@ -19,7 +19,7 @@ module Development.Ruin
     , os_execsuffix
 
     -- * Source, intermediate & destination file types
-    , Type, none, stage, stagep, type_fusing_p, type_extension, retype_file
+    , Type, none, type_fusing_p, type_extension, retype_file
     , Inputs(..), FlagType(..)
 
     -- * Transformations
@@ -163,8 +163,6 @@ class (BC (Type a), BC (Arch a), BC (OSType a), BC (OSVersion a), BC (ToolKind a
     ⇒ Build a where
     data Type a      ∷ *
     none             ∷ Type a
-    stage            ∷ String → Type a
-    stagep           ∷ Type a → Bool
     type_fusing_p    ∷ Type a → Bool
     type_extension   ∷ Type a → String
     data Arch a      ∷ *
@@ -348,11 +346,6 @@ data XIR a where
     XIR ∷ Build a ⇒ XQuery a → CtxVal a → XIR a
 deriving instance Show     (XIR a)
 deriving instance Typeable (XIR)
-
-data Files a =
-    Files     a String [String]   -- type srcRoot wildcards-as-per-System.Path.Glob
-    deriving (Eq, Show, Generic)
-instance Hashable a ⇒ Hashable (Files a)
 
 eval_CtxExp ∷ Build a ⇒ Tag a → Plat a → ToolKind a → Maybe (Type a, String) → CtxExp a → Bool
 eval_CtxExp tag plat@(Plat arch os@(OS ostype _)) tkind mFilename expr =
