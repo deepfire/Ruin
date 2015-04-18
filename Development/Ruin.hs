@@ -546,7 +546,7 @@ data Component a =
       cTags            ∷ [Tag a],
       cType            ∷ Type a,
       cFile            ∷ String, -- Source
-      cDeps            ∷ [String],
+      cDeps            ∷ [CtxVal a],
       cAction          ∷ ToolActionSimple
     }
 
@@ -785,7 +785,8 @@ component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outd
       ToolComponent _ chain_name _ _ _ _ → compbble chain_name
       Target name _ ty file deps act     → b
           where b = Buildable name comp ctx_top tag for_plat outdir
-                    $ fromList [(file, (ChainLink deps ty file ty notool (XQuery (\_ _ → [])) (\out ins _ → act out ins), b))]
+                    $ fromList [(file, (ChainLink depfiles ty file ty notool (XQuery (\_ _ → [])) (\out ins _ → act out ins), b))]
+                depfiles = concat [ ξ_files bbles for_plat ξ | XInputs ξ ← deps]
 
 compute_buildables ∷ Build a ⇒ Plat a → Schema a → CompMap a → ChainMap a → [DefTool a] → CtxMap a → [Buildable a]
 compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chainmap tools (CtxMap ctxmap) =
