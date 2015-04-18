@@ -44,7 +44,7 @@ module Development.Ruin
     , varspec_add
 
     -- * Util
-    , exec, shell, unsafeExec, unsafeShell, cmd2
+    , exec, shell, unsafeExec, unsafeShell, cmd
     , map_to_hashmap, invert_hashmap
     , lcstr, lcShow
     , (%>)
@@ -71,18 +71,20 @@ import Data.Typeable
 
 import Debug.Trace (trace)
 
-import Development.Shake
+import qualified Development.Shake         as S (cmd)
+import qualified Development.Shake.Command as S (CmdArguments)
+import Development.Shake                 hiding (cmd)
 import Development.Shake.Command()
 import Development.Shake.FilePath
 
 import Prelude.Unicode
 
-import System.Process (rawSystem)
 import System.Console.GetOpt (OptDescr(..), ArgDescr(..))
+import System.Directory (findExecutable)
 import System.Path.Glob (glob)
 -- import System.Path.NameManip (dir_part, filename_part)
 
-import System.Process (readProcess, readProcessWithExitCode)
+import System.Process (rawSystem, readProcess, readProcessWithExitCode)
 
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -133,11 +135,8 @@ shell comm = do
   (_, out, err) ← readProcessWithExitCode "sh" ["-c", comm] []
   return $ out ++ err
 
-cmd2 ∷ String → [String] → Action ()
-cmd2 comm args = do
-  putLoud $ printf "cmd> %s %s" comm $ intercalate " " args
-  _ ← liftIO $ rawSystem comm args
-  return ()
+cmd ∷ S.CmdArguments args => args
+cmd = S.cmd (Traced "")
 
 unsafeExec ∷ String → [String] → String
 unsafeExec executable args = unsafePerformIO (exec executable args)
