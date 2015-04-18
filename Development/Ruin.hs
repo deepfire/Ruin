@@ -156,10 +156,7 @@ type instance C a = (Eq a, Generic a, Hashable a, Show a, Typeable a)
 
 
 --- One to Bind Them All:
-type family   BC a :: Constraint
-type instance BC a = (Eq a, Generic a, Hashable a, Show a, Typeable a)
-
-class (BC (Type a), BC (Arch a), BC (OSType a), BC (OSVersion a), BC (ToolKind a), BC (ChainName a), BC (Tag a))
+class (C (Type a), C (Arch a), C (OSType a), C (OSVersion a), C (ToolKind a), C (ChainName a), C (Tag a))
     ⇒ Build a where
     data Type a      ∷ *
     none             ∷ Type a
@@ -260,7 +257,7 @@ data ChainLink a where
     ChainLink ∷ Build a ⇒ [String] → Type a → String → Type a → ToolKind a → XQuery a → ToolAction → ChainLink a
 
 instance Show (ChainLink a) where
-    show (ChainLink infs inty outf outty tkin _ _) = printf "#<LINK (%s<-%s) %s: %s ← %s" (show outty) (show inty) (show tkin) (show outf) (show infs)
+    show (ChainLink infs inty outf outty tkin _ _) = printf "#<LINK (%s<-%s) %s: %s ← %s>" (show outty) (show inty) (show tkin) (show outf) (show infs)
 
 
 -- A condition for extending the build environment
