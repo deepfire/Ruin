@@ -6,6 +6,6 @@
 [subrepo]
 	remote = git@github.com:deepfire/Ruin.git
 	branch = master
-	commit = c1d4d99c97f4a2da9f9750a84f91b0c4801b08ab
-	parent = cedd9c8ca8928999591ff191cbe313fae980d65e
-	cmdver = 0.2.0
+	commit = 65fa491d536f6398fbec915c5c1f895476bbf441
+	parent = 2e93b00b96bcdda5a74310093ad350ee50ed7447
+	cmdver = 0.2.1
