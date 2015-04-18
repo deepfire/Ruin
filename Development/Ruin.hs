@@ -328,7 +328,7 @@ instance Build a ⇒ Hashable (Inputs a) where
     hashWithSalt s (Comp a)      = s `hashWithSalt` (hash a)
     hashWithSalt s (Gen  a b _)  = s `hashWithSalt` (hash a) `hashWithSalt` (hash b)
 
--- An atom of build environment
+-- * An atom of build environment.
 data CtxVal a where
     XFlags  ∷ Build a ⇒ FlagType a → [String] → CtxVal a   -- ^ Flags added at the current point of context.
     XInputs ∷ Build a ⇒ Inputs a              → CtxVal a   -- ^ Inputs added at the current point of context.
@@ -339,18 +339,18 @@ instance  Hashable (CtxVal a) where
     hashWithSalt s (XFlags x y) = s `hashWithSalt` (hash x) `hashWithSalt` (hash y)
     hashWithSalt s (XInputs x)  = s `hashWithSalt` (hash x)
 
+-- * Second (flag) phase evaluation entry point.
 data XQuery a where
     XQuery ∷ Build a ⇒ ((Type a, String) → Bool → [CtxVal a]) → XQuery a
 instance Show     (XQuery a) where
     show (XQuery _) = "#<XQuery>"
 deriving instance Typeable (XQuery)
 
+-- Cross-phase context tracking
 data XIR a where
     XIR ∷ Build a ⇒ XQuery a → CtxVal a → XIR a
 deriving instance Show     (XIR a)
 deriving instance Typeable (XIR)
--- instance Hashable (XIR a) where
---     hashWithSalt s (XIR _ y) = s `hashWithSalt` (hash y)
 
 data Files a =
     Files     a String [String]   -- type srcRoot wildcards-as-per-System.Path.Glob
@@ -459,7 +459,7 @@ eval_Ctx ∷ ∀ a . Build a
              ⇒ CtxMap a → Tag a → Plat a → ToolKind a     -- context (general, not Ctx sense)
              → Maybe (Type a, String) → Bool              -- stage specifier, turn on explanation mode
              → Ctx a → [Either (XIR a) (CtxVal a)]        -- argument → return value
-eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
+eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage_ explain_mode ctx_top =
     ret
     where (_, ret)  = eval (HS.empty, []) (Right ctx_top)
           namemap   = invert_hashmap ctxmap
@@ -469,7 +469,7 @@ eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
                                     Nothing → error $ printf "Unknown context parent node name: '%s'" n
                                     Just x  → x
           eval_case ctxval_res val_filter_fn (caseCond, caseVals) =
-              [ ctxval_res val | eval_CtxExp tag plat tool stage caseCond,
+              [ ctxval_res val | eval_CtxExp tag plat tool stage_ caseCond,
                                  val           ← caseVals,
                                  val_filter_fn val ]
           eval (seen, acc) (find_parent → this@(Ctx parents cases)) =
@@ -477,7 +477,7 @@ eval_Ctx cxm@(CtxMap ctxmap) tag plat tool stage explain_mode ctx_top =
                                           (seen, acc)
               else (if explain_mode then trace (printf "visit> %s → %s" (ctxdesc this) (show added)) else id) res
                    where (ctxval_res, val_filter_fn)
-                               = case stage of
+                               = case stage_ of
                                    Nothing       → (\val → Left $ XIR xquery val,         ctxval_ξp)
                                         where xquery = make_xquery cxm tag plat tool this
                                    Just (ty, _)  → (\val → Right $ val,                   ctxval_xflags_matchp ty tool)
@@ -617,7 +617,7 @@ buildable_output (Buildable _    (Target _ _ _ file _ _) _ _ _ _ _)             
 type ChainLinkConsCtx = (String, Int, Int)
 
 -- * Compute chainlinks for a given set of XInputs (ξs)
-ξs_chainlinks :: Build a ⇒ CompMap a → ChainMap a → [Buildable a] → Plat a → Type a → [XIR a] → [(Inputs a, ChainLink a)]
+ξs_chainlinks ∷ Build a ⇒ CompMap a → ChainMap a → [Buildable a] → Plat a → Type a → [XIR a] → [(Inputs a, ChainLink a)]
 ξs_chainlinks compmap chainmap buildables to_plat thisty xirs =
     cls
     where cls = [ (inp, ChainLink [] none f inp_ty notool xquery
