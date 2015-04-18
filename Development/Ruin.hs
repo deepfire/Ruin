@@ -1,4 +1,4 @@
-{-# LANGUAGE ConstraintKinds, DataKinds, DeriveDataTypeable, DeriveGeneric, ExtendedDefaultRules, FlexibleContexts, GADTs, KindSignatures, MultiWayIf, RankNTypes, ScopedTypeVariables, StandaloneDeriving, TransformListComp, TupleSections, TypeFamilies, QuasiQuotes, UndecidableInstances, UnicodeSyntax, ViewPatterns #-}
+{-# LANGUAGE ConstraintKinds, DataKinds, DeriveDataTypeable, DeriveGeneric, ExtendedDefaultRules, FlexibleContexts, GADTs, KindSignatures, MultiWayIf, RankNTypes, ScopedTypeVariables, StandaloneDeriving, TransformListComp, TupleSections, TypeOperators, TypeFamilies, QuasiQuotes, UndecidableInstances, UnicodeSyntax, ViewPatterns #-}
 
 -- | A module for declarative definition of complex build systems.
 -- Ruin tries to provide the build system engineer with a language closer to what
@@ -7,8 +7,8 @@
 module Development.Ruin
     (
     -- * Location kinds & Path
-      LocationKind(..), LFixed(..), LGeneric(..)
-    , SysExec(..), BuildableExec(..)
+      Locatable(..), LFixed(..)
+    , SysExec(..), sysExec, BbleToolExec, toolExec
     , Path(..) 
 
     -- * The Build System Type
@@ -23,7 +23,7 @@ module Development.Ruin
     , Inputs(..), FlagType(..)
 
     -- * Transformations
-    , Tool(..), exec_tool, ToolKind, notool, ToolAction, ToolActionSimple
+    , DefTool(..), exec_tool, ToolKind, notool, ToolAction, ToolActionSimple
     , Chain(..), ChainName, ChainMap(..), ChainLink(..)
 
     -- * Context
@@ -32,7 +32,7 @@ module Development.Ruin
     , ctxR, ctxN, ctxRCase, ctxNCase, ctxRIf, ctxNIf, ctxRWhen, ctxNWhen
 
     -- * Components
-    , Component(..), Tag, CompMap(..)
+    , Component(..), Tag, CompMap(..), component_name
     , Buildable(..), compute_buildables, buildable_output
 
     -- * Composition
@@ -150,26 +150,9 @@ instance (Out a, Out b) ⇒ Out (HashMap a b) where
   docPrec _ = doc
 
 
---- Path generalisation
-data LFixed = LFixed String deriving (Eq, Generic, Show)
-
-class LocationKind a where
-    resolve ∷ a → LFixed
-
-data LGeneric a where
-    LGen ∷ LocationKind a ⇒ String → a → LGeneric a
-
-deriving instance Eq a ⇒ Eq (LGeneric a)
-
-data Path a where
-    PFixed   ∷                  LFixed     → Path LFixed
-    PGeneric ∷ LocationKind b ⇒ LGeneric b → Path (LGeneric b)
-
-data SysExec =
-    SysExec String
-    deriving (Eq, Generic, Show)
-instance LocationKind (SysExec) where
-    resolve (SysExec name) = LFixed $ "/usr/bin" </> name
+-- * A constraint for making user-presentable entities, suitable for a DSL
+type family   C a :: Constraint
+type instance C a = (Eq a, Generic a, Hashable a, Show a, Typeable a)
 
 
 --- One to Bind Them All:
@@ -233,21 +216,35 @@ instance Eq  (Plat a) where
 type ToolAction        = String → [String] → [String] → Action ()
 type ToolActionSimple  = String → [String] →            Action () -- a flagless option
 
-data Tool a =
-    Tool (ToolKind a) (Type a) (Type a) [(Plat a, Plat a, String)] (String → ToolAction)
-    deriving (Generic)
+data DefTool a where
+    DefTool ∷ Build a ⇒ ToolKind a → [Type a] → Type a → [(Plat a, Plat a, ToolLoc a)] → (String → ToolAction) -> DefTool a
 
-exec_tool ∷ Build a ⇒ [Tool a] → ToolKind a → (Type a, Type a) → (Plat a, Plat a) → ToolAction
-exec_tool available_tools want_toolkind (want_tyfrom, want_tyto) (this_plat, for_plat) out ins flags =
-    case [ ignt trace (printf "found %s %s→%s for %s" (show toolkind) (show tyfrom) (show tyto) out)
-           (c, tool_exec)
-         | c@(Tool toolkind tyfrom tyto tool_variants _) ← available_tools
-         , (on, for, tool_exec)                          ← tool_variants
+data Tool a where
+    Tool    ∷ Build a ⇒ ToolKind a → (Type a, Type a) → (Plat a, Plat a) → LFixed → (String → ToolAction) -> Tool a
+
+find_tool ∷ Build a ⇒ [DefTool a] → [Buildable a] → ToolKind a → (Type a, Type a) → (Plat a, Plat a) → Tool a
+find_tool available_tools buildables want_toolkind (want_tyfrom, want_tyto) (this_plat, for_plat) =
+    case [ Tool toolkind (tyfrom, tyto) (on, for) (LFixed $
+                                                   case loc of
+                                                     SysToolLoc  (PLook SE  name) → case unsafePerformIO $ findExecutable name of
+                                                                                          Just f  → f
+                                                                                          Nothing → error $ printf "Unable to locate system executable '%s'." name
+                                                     CompToolLoc (PLook BTE bble) → buildable_output b where b = match_buildable buildables Nothing (Just this_plat) (Right bble)
+                                                                                                                                 "while searching for a generated tool"
+                                                     ) act
+         | DefTool toolkind tyfroms tyto tool_variants act ← available_tools
+         , tyfrom                                          ← tyfroms
+         , (on, for, loc)                                  ← tool_variants
          , -- trace (printf "try %s<>%s %s<>%s %s<>%s %s<>%s %s<>%s"
            --               (show toolkind) (show want_toolkind) (show tyfrom) (show want_tyfrom) (show tyto) (show want_tyto) (show on) (show this_plat) (show for) (show for_plat)) $
            toolkind ≡ want_toolkind ∧ tyfrom ≡ want_tyfrom ∧ tyto ≡ want_tyto ∧ on ≡ this_plat ∧ for ≡ for_plat ] of
-      []  → error (printf "Failed to find a suitable tool: (%s←%s) on-plat=%s to-plat=%s" (show want_tyto) (show want_tyfrom) (show this_plat) (show for_plat))
-      (Tool toolkind _ _ _ fnV, tool_exec):_ → fnV tool_exec out ins flags
+      []     → error (printf "Failed to find a suitable tool: (%s←%s) on-plat=%s to-plat=%s" (show want_tyto) (show want_tyfrom) (show this_plat) (show for_plat))
+      tool:_ → tool
+
+exec_tool ∷ Build a ⇒ Tool a → ToolAction
+exec_tool (Tool _ _ _ (LFixed path) fnV) out ins flags = do
+  need [path]
+  fnV path out ins flags
 
 -- Chains
 -- Because of ambiguities of composition (f.e. both GCCLD and LD can perform CObj → Executable transforms)
@@ -560,8 +557,14 @@ data Component a =
       cAction          ∷ ToolActionSimple
     }
 
-newtype CompMap a = CompMap (HashMap String (Component a))
+component_name ∷ Build a ⇒ Component a → CompName a
+component_name (ToolComponent ton _ _ _ _ _) = Right ton
+component_name comp                          = Left $ cName comp
 
+
+type CompName a = Either String (ToolKind a)
+
+newtype CompMap a = CompMap (HashMap (CompName a) (Component a))
 input_type ∷ Build a ⇒ CompMap a → ChainMap a → Inputs a → Type a
 input_type (CompMap comap) chainmap inp =
     case inp of
@@ -589,20 +592,51 @@ data Buildable a where
         bOutFiles   ∷ HashMap String (ChainLink a, Buildable a)
     } → Buildable a
 
-data BuildableExec a =
-    BuildableExec (Buildable a)
-    deriving (Generic)
-instance LocationKind (BuildableExec a) where
-    resolve (BuildableExec bble) = LFixed $ buildable_output bble
-
-match_buildable ∷ Build a ⇒ [Buildable a] → String → Maybe (Tag a) → Plat a → Buildable a
-match_buildable buildables compname tag plat =
+match_buildable ∷ Build a ⇒ [Buildable a] → Maybe (Tag a) → Maybe (Plat a) → CompName a → String → Buildable a
+match_buildable buildables maybetag maybeplat compname reason =
     case results of
-      []    → error $ printf "No buildable for:  comp=%s  plat=%s." compname (show plat)
+      []    → error $ printf "Unable to find a matching buildable %s:  comp=%s  tag=%s  plat=%s." reason (show compname) (show maybetag) (show maybeplat)
       x : _ → x
     where results = [ b
                       | b@(Buildable _ comp _ btag sliceplat _ _) ← buildables
-                      , (cName comp) ≡ compname ∧ sliceplat ≡ plat ∧ btag ≡ (fromMaybe btag tag) ]
+                      , (component_name comp) ≡ compname ∧ btag ≡ (fromMaybe btag maybetag) ∧ sliceplat ≡ (fromMaybe sliceplat maybeplat) ]
+
+
+-- * Path generalisation
+data LFixed = LFixed String deriving (Eq, Generic, Show)
+
+class Locatable a where
+    type LocName a   ∷ *
+    type LocCtx a    ∷ *
+
+data Path a where
+    PFixed ∷                   LFixed    → Path LFixed  -- ^ A concrete path -- a pathname.
+    PLook  ∷ Locatable b ⇒ b → LocName b → Path b       -- ^ Implied path subject to 'lookup'-based resolution.
+
+data                BbleToolExec a  = BTE
+instance Build a ⇒ Locatable (BbleToolExec a) where
+    type LocName   (BbleToolExec a) = ToolKind a
+    type LocCtx    (BbleToolExec a) = ([Buildable a], Plat a)
+
+data               SysExec = SE
+instance Locatable SysExec where
+    type LocName   SysExec = String
+    type LocCtx    SysExec = ()
+
+sysExec ∷ Build a ⇒ String → ToolLoc a
+sysExec name = SysToolLoc $ PLook SE name
+
+toolExec :: Build a ⇒ ToolKind a → ToolLoc a
+toolExec tk  = CompToolLoc $ PLook BTE tk
+
+-- class Build a ⇒ ToolLoc a where
+--     location
+data ToolLoc a where
+    SysToolLoc  ∷ Build a ⇒ Path SysExec          → ToolLoc a
+    CompToolLoc ∷ Build a ⇒ Path (BbleToolExec a) → ToolLoc a
+
+-- resolve_tool :: Build a ⇒ ToolLoc a → (LFixed, Bool)
+-- resolve_tool ctx loc = 
 
 component_type ∷ Build a ⇒ ChainMap a → Component a → Type a
 component_type (ChainMap chmap) (Component _ chname _ _ _ _)     = ty where (Chain ty _ _) = chmap ! chname
@@ -642,57 +676,62 @@ component_name_output buildables to_plat compname =
                   f                         ← ξ_files buildables to_plat inp ]
 
 do_forge_chainlinks ∷ ∀ a . Build a ⇒
-                    CompMap a → CtxMap a → [Buildable a] → ChainMap a → [Tool a] →
+                    CompMap a → CtxMap a → [Buildable a] → ChainMap a → [DefTool a] →
                     Tag a → ChainLinkConsCtx → Ctx a → Chain a → (Plat a, Plat a) → HashMap (ToolKind a) [XIR a] → Type a → String →
                     ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
-do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (clink_name, depth, idx) ctx_top (Chain thisty tool children_chains) (on_plat, to_plat) tool_XIRmap upwardty outdir =
-    let id_step chidx    = (printf "%s.[%d]" clink_name idx, depth + 1, chidx)
+do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (clink_name, depth, idx) ctx_top (Chain thisty tkind children_chains) (on_plat, to_plat) tool_XIRmap upwardty outdir =
+    let tool             = find_tool tooldefs buildables tkind (thisty, upwardty) (on_plat, to_plat)
+        clink_xform      = exec_tool tool
+        id_step chidx    = (printf "%s.%d" clink_name idx, depth + 1, chidx)
         leafp            = null children_chains
         leaf_ins_ephemeral (Gen _ _ _) = False
         leaf_ins_ephemeral _           = True
-        clink_xform      = exec_tool tools tool (thisty, upwardty) (on_plat, to_plat)
-        (upward_acc,
-         upward_result) = if leafp
-                          then ([], ξs_chainlinks compmap chainmap buildables to_plat thisty (tool_XIRmap ! tool))
-                          else let intrep = [ do_forge_chainlinks compmap ctxmap buildables chainmap tools tag (id_step i) ctx_top chain (on_plat, to_plat) tool_XIRmap thisty outdir
-                                            | (i, chain) ← zip [1..] children_chains ]
-                                   intrep        ∷ [([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])]
-                               in mconcat intrep ∷  ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
+        (acc,
+         result) = if leafp
+                   then ([], ξs_chainlinks compmap chainmap buildables to_plat thisty (tool_XIRmap ! tkind))
+                   else let intrep = [ do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (id_step i) ctx_top chain (on_plat, to_plat) tool_XIRmap thisty outdir
+                                     | (i, chain) ← zip [1..] children_chains ]
+                            intrep        ∷ [([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])]
+                        in mconcat intrep ∷  ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
     in
     (-- accumulate promotable results from leaf processing and subchains
-     upward_acc ++ let res = filter (if | depth ≡ 0 → const False
-                                        | leafp     → not ∘ leaf_ins_ephemeral ∘ fst
-                                        | True      → const True)
-                             upward_result
-                       (inp, link) = unzip res in
-                   ignt trace (printf "4   ξ → link @ %s:  %s → %s" (show $ id_step (0-1)) (show inp) (show link)) res,
+     acc ++ let res = filter (if | depth ≡ 0 → const False
+                                 | leafp     → not ∘ leaf_ins_ephemeral ∘ fst
+                                 | True      → const True)
+                      result
+                (inp, link) = unzip res in
+            ignt trace (printf "4   ξ → link @ %s:  %s → %s" (show $ id_step (0-1)) (show inp) (show link)) res,
      -- compute result
      if
      | depth ≡ 0              → [     (ins, ChainLink ifs ity outfile upwardty tk xq xf)
-                                | let (ins, ChainLink ifs ity _       _        tk xq xf):_ = upward_result
+                                | let (ins, ChainLink ifs ity _       _        tk xq xf):_ = result
                                       outfile = outdir </> clink_name <.> (type_extension upwardty) ]
      | type_fusing_p upwardty → [ (ins, ChainLink (foldl (\inacc (_, ChainLink _ _ inarg _ _ _ _) → inacc ++ [inarg])
-                                                          [] upward_result)
-                                                   thisty outfile upwardty tool xquery clink_xform)
+                                                          [] result)
+                                                   thisty outfile upwardty tkind xquery clink_xform)
                                 | let outfile = outdir </> clink_name <.> (type_extension upwardty)
                                       ins     = Srcs upwardty "" []
-                                      xquery  = make_xquery ctxmap tag to_plat tool ctx_top ]
-     | True                   → [ (ins, ChainLink [infile] thisty outfile upwardty tool xquery clink_xform)
-                                | (ins, ChainLink _        _      infile  _        _    xquery _) ← upward_result,
-                                  let outfile = (if leafp then outdir else "") </> retype_file upwardty infile ])
+                                      xquery  = make_xquery ctxmap tag to_plat tkind ctx_top ]
+     | True                   → [ (ins, ChainLink [infile] thisty outfile upwardty tkind xquery clink_xform)
+                                | (ins, ChainLink _        _      infile  _        _     _      _) ← result,
+                                  let outfile = (if leafp then outdir else "") </> retype_file upwardty infile
+                                      xquery  = make_xquery ctxmap tag to_plat tkind ctx_top])
 
-forge_chainlinks ∷ Build a
-                     ⇒ CompMap a → CtxMap a → [Buildable a] → ChainMap a → [Tool a]
+forge_chainlinks ∷ ∀ a . Build a
+                     ⇒ CompMap a → CtxMap a → [Buildable a] → ChainMap a → [DefTool a]
                      → Tag a → String → Ctx a → Chain a → (Plat a, Plat a) → H.HashMap (ToolKind a) [XIR a] → Type a → String
                      → [ChainLink a]
 forge_chainlinks compmap ctxmap bbles chainmap tools tag name ctx_top chain platxform tkind_XIRmap outtype outdir =
     let (acc, ret) = do_forge_chainlinks compmap ctxmap bbles chainmap tools tag (name, 0, 0) ctx_top chain platxform tkind_XIRmap outtype outdir
         res        = acc ++ ret
-        all_ins    = [ (x, []) | XIR _ (XInputs x) ← concat $ H.elems tkind_XIRmap]
-        inp_links  = H.fromListWith (++) $ (all_ins ++ map (fst &&& (:[]) ∘ snd) res)
+        res        ∷ [(Inputs a, ChainLink a)]
+        all_inputs = [ (x, []) | XIR _ (XInputs x) ← concat $ H.elems tkind_XIRmap ]
+        inp_links  = H.fromListWith (++) $ (all_inputs ++ map (fst &&& (:[]) ∘ snd) res)
+        inp_links  ∷ HashMap (Inputs a) [ChainLink a]
         orphan_ins = H.filter null inp_links
     in if not $ H.null orphan_ins
-       then error (printf "Orphan inputs: %s" $ intercalate ", " $ map (\i → printf "%s :: %s" (show i) (show $ input_type compmap chainmap i)) $ H.keys orphan_ins)
+       then error (printf "Orphans inputs detected! (inputs that weren't picked up by any tools):\n   %s" $
+                          intercalate "\n   " $ map (\i → printf "%s :: %s" (show i) (show $ input_type compmap chainmap i)) $ H.keys orphan_ins)
        else map snd res
 
 --   Slice∷
@@ -733,7 +772,7 @@ component_ctx comp =
          ToolComponent _ _ _ x y z → compctx x y z
          Target _ _ _ _ _ _        → (Ctx [] [], \_ _ _ → CtxMap H.empty)
 
-component_buildable ∷ ∀ a . Build a ⇒ Plat a → [Buildable a] → Component a → Ctx a → Tag a → Plat a → String → CompMap a → CtxMap a → ChainMap a → [Tool a] → Int
+component_buildable ∷ ∀ a . Build a ⇒ Plat a → [Buildable a] → Component a → Ctx a → Tag a → Plat a → String → CompMap a → CtxMap a → ChainMap a → [DefTool a] → Int
                     → Buildable a
 component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outdir compmap ctxmap chainmap@(ChainMap chmap) tools slice_width =
     let compbble chain_name = b
@@ -755,7 +794,7 @@ component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outd
           where b = Buildable name comp ctx_top tag for_plat outdir
                     $ fromList [(file, (ChainLink deps ty file ty notool (XQuery (\_ _ → [])) (\out ins _ → act out ins), b))]
 
-compute_buildables ∷ Build a ⇒ Plat a → Schema a → CompMap a → ChainMap a → [Tool a] → CtxMap a → [Buildable a]
+compute_buildables ∷ Build a ⇒ Plat a → Schema a → CompMap a → ChainMap a → [DefTool a] → CtxMap a → [Buildable a]
 compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chainmap tools (CtxMap ctxmap) =
     bbles
     where bbxms = [ (b, submap)
