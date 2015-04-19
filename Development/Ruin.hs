@@ -24,7 +24,7 @@ module Development.Ruin
 
     -- * Transformations
     , DefTool(..), exec_tool, ToolKind, notool, ToolAction, ToolActionSimple
-    , Chain(..), ChainName, ChainMap(..), ChainLink(..)
+    , Chain(..), ChainName, DefChain(..), ChainMap(..), ChainLink(..), define_chains
 
     -- * Context
     , Ctx, CtxExp(..), CtxVal(..)
@@ -248,11 +248,17 @@ exec_tool (Tool _ _ _ (LFixed path) fnV) out ins flags = do
   need [path]
   fnV path out ins flags
 
--- Chains
+-- * Chains
 -- Because of ambiguities of composition (f.e. both GCCLD and LD can perform CObj → Executable transforms)
 -- we need hints.
 -- A Chain is what provides these hints.
+data DefChain a where
+    DefChain ∷ Build a ⇒ ChainName a → Type a → [Chain a] → DefChain a
 
+define_chains ∷ Build a ⇒ [DefChain a] → ChainMap a
+define_chains defs =
+    ChainMap $ fromList [ (name, Chain ty notool cs)
+                        | DefChain name ty cs ← defs ]
 
 data Chain a where
     Chain ∷ Build a ⇒ Type a → ToolKind a → [Chain a] → Chain a
