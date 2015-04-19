@@ -56,6 +56,7 @@ import GHC.Prim
 import Control.Arrow ((&&&))
 
 import Data.Hashable
+import qualified Data.ByteString          as BS (readFile)    
 import Data.Char (toLower)
 import Data.Either (lefts)
 import Data.Either.Utils (fromRight)
