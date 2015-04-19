@@ -48,20 +48,27 @@ module Development.Ruin
     , map_to_hashmap, invert_hashmap
     , lcstr, lcShow
     , (%>)
+
+    -- * Entry point
+    , RuinSpec(..)
+    , ruinArgsWith
     ) where
 
+import GHC.Exts (sortWith)
 import GHC.Generics (Generic)
 import GHC.Prim
 
 import Control.Arrow ((&&&))
+import Control.Monad (forM_)
 
-import Data.Hashable
 import qualified Data.ByteString          as BS (readFile)    
 import Data.Char (toLower)
 import Data.Either (lefts)
 import Data.Either.Utils (fromRight)
+import Data.Functor ((<$>))
+import Data.Hashable
 import qualified Data.HashMap.Lazy as H
-import Data.HashMap.Lazy (HashMap, elems, fromList, toList, (!))
+import Data.HashMap.Lazy (HashMap, elems, empty, fromList, keys, member, size, toList, union, (!))
 import Data.List (intercalate)
 import Data.Map.Lazy ()
 import Data.Monoid (mconcat)
@@ -85,12 +92,12 @@ import System.Directory (findExecutable)
 import System.Path.Glob (glob)
 -- import System.Path.NameManip (dir_part, filename_part)
 
-import System.Process (rawSystem, readProcess, readProcessWithExitCode)
+import System.Process (readProcess, readProcessWithExitCode)
 
 import System.IO.Unsafe (unsafePerformIO)
 
-import Text.PrettyPrint.GenericPretty (pretty, Out(..), doc)
-import Text.PrettyPrint (parens, (<+>), ($$), (<>), text)
+import Text.PrettyPrint.GenericPretty (Out(..), doc)
+import Text.PrettyPrint (parens, (<+>), ($$), text)
 import Text.Printf (printf)
 import Data.Maybe (fromMaybe)
 
@@ -807,3 +814,167 @@ compute_buildables this_plat (Schema schema) compmap@(CompMap comap) chainmap to
                         CtxMap submap = pre_ctx_submap arch tag slice_width ]
           bbles       = map fst bbxms
           full_ctxmap = CtxMap $ foldl H.union ctxmap $ map snd bbxms
+
+--
+data RuinSpec a where
+    RuinSpec ∷ Build a ⇒ {
+      ruinFiles      ∷ String
+    , ruinSpecFile   ∷ String
+    , ruinThisPlat   ∷ Plat a
+    , ruinContext    ∷ VarEnv → CtxMap a
+    , ruinTools      ∷ [DefTool a]
+    , ruinChains     ∷ ChainMap a
+    , ruinComponents ∷ VarEnv → CompMap a
+    , ruinSchema     ∷ VarEnv → Plat a → Schema a
+    , ruinOpts       ∷ OptSpec
+    , ruinVars       ∷ VarEnv → VarMap
+    , ruinDefaults   ∷ VarEnv → HashMap String String
+    , ruinCopies     ∷ VarEnv → HashMap String String
+    , ruinSynonyms   ∷ VarEnv → HashMap String String
+    } → RuinSpec a
+
+-- ^ Empty RuinOptions:
+-- ruinOptions = RuinOptions { ruinFiles      = ".shake"
+--                           , ruinSpecFile   = "Build.hs"
+--                           , ruinThisPlat   = error "RuinOptions: ruinThisPlat must be specified."
+--                           , ruinContext    = const $ CtxMap empty
+--                           , ruinTools      = []
+--                           , ruinChains     = ChainMap empty
+--                           , ruinComponents = const $ CompMap empty
+--                           , ruinSchema     = const $ Schema empty
+--                           , ruinOpts       = []
+--                           , ruinVars       = const $ VarMap empty
+--                           , ruinDefaults   = const empty
+--                           , ruinCopies     = const empty
+--                           , ruinSynonyms   = const empty }
+
+-- * Entry point:
+-- main ∷ IO ()
+-- main = ruinArgsWith RuinSpec { ruinFiles      = (unsafePerformIO $ S.getEnv "shakedir")
+--                              , ruinSpecFile   = "Build.hs"                 -- Or, automagically, using TH: $(LitE . StringL . loc_filename <$> location)
+--                              , ruinThisPlat   = YourPlatformType
+--                              , ruinContext    = main_ctxspec
+--                              , ruinTools      = main_tools
+--                              , ruinChains     = main_chains
+--                              , ruinComponents = main_compspec
+--                              , ruinSchema     = main_schema
+--                              , ruinOpts       = main_options
+--                              , ruinVars       = main_varspec
+--                              , ruinDefaults   = main_defaultspec
+--                              , ruinCopies     = main_copyspec
+--                              , ruinSynonyms   = main_syntargetspec }
+--                     $ \params targets varenv outFileBuildables nameBuildables → do
+--     let VarEnv (_, varS, _, varB) = varenv                                 -- Ruin computed the aggregate variable environment
+--         isBuildableOutFile f = member f outFileBuildables                  -- Here's how to query the computed buildable database
+--         isABuildableName   n = member n nameBuildables                     -- ...
+--
+--     want $ if
+--            | null targets  → ["info"]                                      -- A number of targets is provided by Ruin out of the box
+--            | True          → targets
+--
+--     -- here go the usual Shake rules:
+--     phony "recurse" $ do
+--       ⊥
+ruinArgsWith ∷ Build a ⇒
+                   RuinSpec a
+                 → ([(String, BuildVar)] → [String] → VarEnv → HashMap String (ChainLink a, (Buildable a)) → HashMap String (Buildable a)
+                    → Rules ())
+                 → IO ()
+ruinArgsWith (RuinSpec shakeDir buildHs ruinThisPlat ruinContext ruinTools ruinChains ruinComponents ruinSchema ruinOpts ruinVars ruinDefaults ruinCopies ruinSynonyms) rules = do
+  checksum <- dropWhile (== '-') . show . hashWithSalt 0 <$> BS.readFile buildHs
+  shakeArgsWith shakeOptions { shakeFiles   = shakeDir
+                             , shakeVersion = "hash-" ++ checksum ++ "-" ++ buildHs }
+                (derive_optdescrs ruinOpts) $ \params targets → return $ Just $ do
+
+    let varenv@(VarEnv (var, varS, _, _))
+                             = varspec_add ruinVars $ derive_merged_optmap ruinOpts (VarMap $ fromList params)
+        schema               = ruinSchema        varenv ruinThisPlat
+        ctxmap               = ruinContext       varenv
+        compmap              = ruinComponents    varenv
+        defaults             = ruinDefaults      varenv
+        copies               = ruinCopies        varenv
+        syntargets           = ruinSynonyms      varenv
+        buildables           = compute_buildables ruinThisPlat schema compmap ruinChains ruinTools ctxmap
+    --
+        outFileBuildables    = foldl union empty $ map bOutFiles buildables
+        nameBuildables       = map_to_hashmap bName buildables
+        isBuildableOutFile f = H.member f outFileBuildables
+        isABuildableName   n = H.member n nameBuildables
+
+    phony "info" $ do
+      putNormal $ printf "; specified options:"
+      putNormal $ printf ";    %s" (show params)
+      putNormal $ printf "; effective options:"
+      forM_ [ name | (name, _, _, _) <- ruinOpts ] $ \opt →
+          putNormal $ printf ";   %15s: %s" opt (show $ var opt)
+      putNormal $ printf "; targets: %s" (show targets)
+      putNormal $ printf "; known buildables:"
+      forM_ (map bName buildables) $ \n →
+          putNormal $ printf "   %s" n
+
+    phony "info-chainlinks" $ do
+      let bbname = varS "buildable"
+      putNormal $ printf "Chainlinks of buildable '%s':" bbname
+      forM_ [ (name, clink)
+            | (Buildable name _ _ _ _ _ ofs)   ← buildables,
+              name ≡ bbname,
+              (clink@(ChainLink ifi _ _ _ _ _ _), _) ← elems ofs,
+              then sortWith by ifi ]
+            $ \ (name, clink) →
+                putNormal $ printf "%s: %s" name (show clink)
+
+    phony "info-buildable" $ do
+      let name                                    = varS "buildable"
+          b@(Buildable _ _ _ tag plat _ outfiles) = nameBuildables ! name
+      putNormal $ printf "Info for buildable '%s':" name
+      putNormal $ printf "        file: %s" $ buildable_output b
+      putNormal $ printf "         tag: %s" $ show tag
+      putNormal $ printf "        plat: %s" $ show plat
+      putNormal $ printf "  # of files: %s" $ show $ size outfiles
+
+    forM_ (keys defaults) $ \file →
+        file %> \name → do
+          putNormal $ printf "default> %s" name
+          need [defaults ! name]
+          cmd "cp" (defaults ! name) name "-n" 
+
+    forM_ (keys copies) $ \file →
+        file %> \name → do
+          putNormal $ printf "copy> %s" name
+          need [copies ! name]
+          cmd "cp" (copies ! name) name 
+
+    phonys $ \name → pwhen (member name syntargets) $ do
+      putLoud $ printf "synonym> %s" name
+      need [syntargets ! name]
+
+    isBuildableOutFile ?> \outfile → do
+      putLoud $ printf "file>"
+      putLoud $ printf "file> %s" outfile
+      putLoud $ printf "file>"
+      verbosity <- getVerbosity
+      let loudp                                                                                  = verbosity >= Loud
+          (ChainLink infiles inty _ outty _ (XQuery xquery) tool, Buildable name comp _ _ _ _ _) = outFileBuildables ! outfile
+          fusionp                                                                                = type_fusing_p outty
+          infilesdesc                                                                            = if length infiles < 5 ∨ loudp then intercalate ", " infiles
+                                                                                                   else printf "[..%d files..]" $ length infiles
+      need infiles -- XXX: CONFIG_EFFECTIVE
+      putNormal $ printf "%s<-%s)  %s <- %s, for %s" (show outty) (show inty) outfile infilesdesc name
+      let (query_file, query_type, input, flags) =
+              let fgs = concat [ fs
+                               | XFlags _ fs ← xquery (query_type, query_file) loudp]
+              in case comp of
+                   Target _ _ _ _ _ _ → ("",           outty, infiles, [])
+                   _ | fusionp        → (outfile,      outty, infiles, fgs)
+                   _                  → (infiles !! 0, inty,  infiles, fgs)
+      tool outfile input flags
+
+    phonys $ \name → pwhen (isABuildableName name) $ do
+      putLoud $ printf "buildable> %s, %s" name $ show $ keys nameBuildables
+      putLoud $ printf "buildable> %s, %s" name $ show $ buildable_output $ nameBuildables ! name
+      need [buildable_output $ nameBuildables ! name]
+
+    rules params targets varenv outFileBuildables nameBuildables
+
+pwhen ∷ Bool → a → Maybe a
+pwhen cond body = if not cond then Nothing else Just body
