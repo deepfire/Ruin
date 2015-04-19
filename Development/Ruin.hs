@@ -886,21 +886,21 @@ ruinArgsWith ∷ Build a ⇒
                  → ([(String, BuildVar)] → [String] → VarEnv → HashMap String (ChainLink a, (Buildable a)) → HashMap String (Buildable a)
                     → Rules ())
                  → IO ()
-ruinArgsWith (RuinSpec shakeDir buildHs ruinThisPlat ruinContext ruinTools ruinChains ruinComponents ruinSchema ruinOpts ruinVars ruinDefaults ruinCopies ruinSynonyms) rules = do
+ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components schema_ opts vars defaults_ copies_ synonyms) rules = do
   checksum <- dropWhile (== '-') . show . hashWithSalt 0 <$> BS.readFile buildHs
   shakeArgsWith shakeOptions { shakeFiles   = shakeDir
                              , shakeVersion = "hash-" ++ checksum ++ "-" ++ buildHs }
-                (derive_optdescrs ruinOpts) $ \params targets → return $ Just $ do
+                (derive_optdescrs opts) $ \params targets → return $ Just $ do
 
     let varenv@(VarEnv (var, varS, _, _))
-                             = varspec_add ruinVars $ derive_merged_optmap ruinOpts (VarMap $ fromList params)
-        schema               = ruinSchema        varenv ruinThisPlat
-        ctxmap               = ruinContext       varenv
-        compmap              = ruinComponents    varenv
-        defaults             = ruinDefaults      varenv
-        copies               = ruinCopies        varenv
-        syntargets           = ruinSynonyms      varenv
-        buildables           = compute_buildables ruinThisPlat schema compmap ruinChains ruinTools ctxmap
+                             = varspec_add vars $ derive_merged_optmap opts (VarMap $ fromList params)
+        schema               = schema_       varenv thisPlat
+        ctxmap               = context       varenv
+        compmap              = components    varenv
+        defaults             = defaults_     varenv
+        copies               = copies_       varenv
+        syntargets           = synonyms      varenv
+        buildables           = compute_buildables thisPlat schema compmap chains tools ctxmap
     --
         outFileBuildables    = foldl union empty $ map bOutFiles buildables
         nameBuildables       = map_to_hashmap bName buildables
@@ -911,7 +911,7 @@ ruinArgsWith (RuinSpec shakeDir buildHs ruinThisPlat ruinContext ruinTools ruinC
       putNormal $ printf "; specified options:"
       putNormal $ printf ";    %s" (show params)
       putNormal $ printf "; effective options:"
-      forM_ [ name | (name, _, _, _) <- ruinOpts ] $ \opt →
+      forM_ [ name | (name, _, _, _) <- opts ] $ \opt →
           putNormal $ printf ";   %15s: %s" opt (show $ var opt)
       putNormal $ printf "; targets: %s" (show targets)
       putNormal $ printf "; known buildables:"
