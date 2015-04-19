@@ -564,11 +564,17 @@ component_name ∷ Build a ⇒ Component a → CompName a
 component_name (ToolComponent ton _ _ _ _ _) = Right ton
 component_name comp                          = Left $ cName comp
 
-lookup_component ∷ Build a ⇒ CompMap a → String → Component a
-lookup_component (CompMap comap) cname =
-    case H.lookup (Left cname) comap of
-      Nothing → error $ printf "Unknown component: %s" $ show cname
-      Just co → co
+find_component ∷ Build a ⇒ CompMap a → String → Component a
+find_component (CompMap map_) name =
+    case H.lookup (Left name) map_ of
+      Nothing → error $ printf "Unknown component: %s" $ show name
+      Just x  → x
+
+find_chain ∷ Build a ⇒ ChainMap a → ChainName a → Chain a
+find_chain (ChainMap map_) name =
+    case H.lookup name map_ of
+      Nothing → error $ printf "Unknown chain: %s" $ show name
+      Just x  → x
 
 type CompName a = Either String (ToolKind a)
 
@@ -577,7 +583,7 @@ newtype CompMap a = CompMap (HashMap (CompName a) (Component a))
 input_type ∷ Build a ⇒ CompMap a → ChainMap a → Inputs a → Type a
 input_type comap chainmap inp =
     case inp of
-      Comp cname       → component_type chainmap $ lookup_component comap cname
+      Comp cname       → component_type chainmap $ find_component comap cname
       Gen  ty _ _      → ty
       Srcs ty _ _      → ty
 
@@ -638,18 +644,13 @@ sysExec name = SysToolLoc $ PLook SE name
 toolExec :: Build a ⇒ ToolKind a → ToolLoc a
 toolExec tk  = CompToolLoc $ PLook BTE tk
 
--- class Build a ⇒ ToolLoc a where
---     location
 data ToolLoc a where
     SysToolLoc  ∷ Build a ⇒ Path SysExec          → ToolLoc a
     CompToolLoc ∷ Build a ⇒ Path (BbleToolExec a) → ToolLoc a
 
--- resolve_tool :: Build a ⇒ ToolLoc a → (LFixed, Bool)
--- resolve_tool ctx loc = 
-
 component_type ∷ Build a ⇒ ChainMap a → Component a → Type a
-component_type (ChainMap chmap) (Component _ chname _ _ _ _)     = ty where (Chain ty _ _) = chmap ! chname
-component_type (ChainMap chmap) (ToolComponent _ chname _ _ _ _) = ty where (Chain ty _ _) = chmap ! chname
+component_type chmap (Component _ chname _ _ _ _)     = ty where (Chain ty _ _) = find_chain chmap chname
+component_type chmap (ToolComponent _ chname _ _ _ _) = ty where (Chain ty _ _) = find_chain chmap chname
 component_type _                (Target _ _ ty _ _ _)            = ty
 
 buildable_output ∷ Buildable a → String
@@ -783,13 +784,13 @@ component_ctx comp =
 
 component_buildable ∷ ∀ a . Build a ⇒ Plat a → [Buildable a] → Component a → Ctx a → Tag a → Plat a → String → CompMap a → CtxMap a → ChainMap a → [DefTool a] → Int
                     → Buildable a
-component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outdir compmap ctxmap chainmap@(ChainMap chmap) tools slice_width =
+component_buildable this_plat bbles comp ctx_top tag for_plat@(Plat arch _) outdir compmap ctxmap chainmap tools slice_width =
     let compbble chain_name = b
             where b                           = Buildable name comp ctx_top tag for_plat outdir out_filemap
                   name                        = compute_buildable_name comp arch tag slice_width
                   chtolis  ∷ (Type a → ToolKind a → ToolKind a) → Chain a → [ToolKind a]
                   chtolis f (Chain ty tk chs) = (f ty tk) : (concat $ map (chtolis f) chs)
-                  chain_top@(Chain topty _ _) = chmap ! chain_name
+                  chain_top@(Chain topty _ _) = find_chain chainmap chain_name
                   tkinds                      = chtolis (\_ tk -> tk) chain_top
                   tkind_XIRmap                = H.fromList $ map (\tkind → (tkind, lefts $ eval_Ctx ctxmap tag for_plat tkind Nothing False ctx_top))
                                                                  tkinds
