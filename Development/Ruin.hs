@@ -69,7 +69,7 @@ import Data.Functor ((<$>))
 import Data.Hashable
 import qualified Data.HashMap.Lazy as H
 import Data.HashMap.Lazy (HashMap, elems, empty, fromList, keys, member, size, toList, union, (!))
-import Data.List (intercalate)
+import Data.List (intercalate, nub)
 import Data.Map.Lazy ()
 import Data.Monoid (mconcat)
 import qualified Data.HashSet as HS
@@ -689,7 +689,7 @@ do_forge_chainlinks ∷ ∀ a . Build a ⇒
                     CompMap a → CtxMap a → [Buildable a] → ChainMap a → [DefTool a] →
                     Tag a → ChainLinkConsCtx → Ctx a → Chain a → (Plat a, Plat a) → HashMap (ToolKind a) [XIR a] → Type a → String →
                     ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
-do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (clink_name, depth, idx) ctx_top (Chain thisty tkind children_chains) (on_plat, to_plat) tool_XIRmap upwardty outdir =
+do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (clink_name, depth, idx) ctx_top (Chain thisty tkind children_chains) (on_plat, to_plat) tkind_XIRmap upwardty outdir =
     let tool             = find_tool tooldefs buildables tkind (thisty, upwardty) (on_plat, to_plat)
         clink_xform      = exec_tool tool
         id_step chidx    = (printf "%s.%d" clink_name idx, depth + 1, chidx)
@@ -698,8 +698,8 @@ do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (clink_name,
         leaf_ins_ephemeral _           = True
         (acc,
          result) = if leafp
-                   then ([], ξs_chainlinks compmap chainmap buildables to_plat thisty (tool_XIRmap ! tkind))
-                   else let intrep = [ do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (id_step i) ctx_top chain (on_plat, to_plat) tool_XIRmap thisty outdir
+                   then ([], ξs_chainlinks compmap chainmap buildables to_plat thisty (tkind_XIRmap ! tkind))
+                   else let intrep = [ do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (id_step i) ctx_top chain (on_plat, to_plat) tkind_XIRmap thisty outdir
                                      | (i, chain) ← zip [1..] children_chains ]
                             intrep        ∷ [([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])]
                         in mconcat intrep ∷  ([(Inputs a, ChainLink a)], [(Inputs a, ChainLink a)])
@@ -837,7 +837,7 @@ data RuinSpec a where
     , ruinVars       ∷ VarEnv → VarMap
     , ruinDefaults   ∷ VarEnv → HashMap String String
     , ruinCopies     ∷ VarEnv → HashMap String String
-    , ruinSynonyms   ∷ VarEnv → HashMap String String
+    , ruinSynonyms   ∷ VarEnv → HashMap String [String]
     } → RuinSpec a
 
 -- ^ Empty RuinOptions:
@@ -898,15 +898,20 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
         schema               = schema_       varenv thisPlat
         ctxmap               = context       varenv
         compmap              = components    varenv
-        defaults             = defaults_     varenv
-        copies               = copies_       varenv
-        syntargets           = synonyms      varenv
         buildables           = compute_buildables thisPlat schema compmap chains tools ctxmap
     --
-        outFileBuildables    = foldl union empty $ map bOutFiles buildables
-        nameBuildables       = map_to_hashmap bName buildables
-        isBuildableOutFile f = H.member f outFileBuildables
-        isABuildableName   n = H.member n nameBuildables
+        out_file_buildables  = foldl union empty $ map bOutFiles buildables
+        name_buildables      = map_to_hashmap bName buildables
+        tag_buildables       = H.fromListWith (++) [ (lcShow $ bTag b, [b])
+                                                   | b ← buildables ]
+        isBuildableOutFile f = H.member f out_file_buildables
+        isABuildableName   n = H.member n name_buildables
+    --
+        defaults             = defaults_     varenv
+        copies               = copies_       varenv
+        syntargets           = H.union (synonyms varenv) $ H.fromList [ ("tag-" ++ tag, map buildable_output bs)
+                                                                      | (tag, bs) ← H.toList tag_buildables ]
+    --
 
     phony "info" $ do
       putNormal $ printf "; specified options:"
@@ -918,6 +923,9 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
       putNormal $ printf "; known buildables:"
       forM_ (map bName buildables) $ \n →
           putNormal $ printf "   %s" n
+      putNormal $ printf "; known tags:"
+      forM_ (keys tag_buildables) $ \n →
+          putNormal $ printf "   tag-%s" n
 
     phony "info-chainlinks" $ do
       let bbname = varS "buildable"
@@ -932,7 +940,7 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
 
     phony "info-buildable" $ do
       let name                                    = varS "buildable"
-          b@(Buildable _ _ _ tag plat _ outfiles) = nameBuildables ! name
+          b@(Buildable _ _ _ tag plat _ outfiles) = name_buildables ! name
       putNormal $ printf "Info for buildable '%s':" name
       putNormal $ printf "        file: %s" $ buildable_output b
       putNormal $ printf "         tag: %s" $ show tag
@@ -953,7 +961,7 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
 
     phonys $ \name → pwhen (member name syntargets) $ do
       putLoud $ printf "synonym> %s" name
-      need [syntargets ! name]
+      need $ syntargets ! name
 
     isBuildableOutFile ?> \outfile → do
       putLoud $ printf "file>"
@@ -961,7 +969,7 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
       putLoud $ printf "file>"
       verbosity <- getVerbosity
       let loudp                                                                                  = verbosity >= Loud
-          (ChainLink infiles inty _ outty _ (XQuery xquery) tool, Buildable name comp _ _ _ _ _) = outFileBuildables ! outfile
+          (ChainLink infiles inty _ outty _ (XQuery xquery) tool, Buildable name comp _ _ _ _ _) = out_file_buildables ! outfile
           fusionp                                                                                = type_fusing_p outty
           infilesdesc                                                                            = if length infiles < 5 ∨ loudp then intercalate ", " infiles
                                                                                                    else printf "[..%d files..]" $ length infiles
@@ -977,11 +985,11 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
       tool outfile input flags
 
     phonys $ \name → pwhen (isABuildableName name) $ do
-      putLoud $ printf "buildable> %s, %s" name $ show $ keys nameBuildables
-      putLoud $ printf "buildable> %s, %s" name $ show $ buildable_output $ nameBuildables ! name
-      need [buildable_output $ nameBuildables ! name]
+      putLoud $ printf "buildable> %s, %s" name $ show $ keys name_buildables
+      putLoud $ printf "buildable> %s, %s" name $ show $ buildable_output $ name_buildables ! name
+      need [buildable_output $ name_buildables ! name]
 
-    rules params targets varenv outFileBuildables nameBuildables
+    rules params targets varenv out_file_buildables name_buildables
 
 pwhen ∷ Bool → a → Maybe a
 pwhen cond body = if not cond then Nothing else Just body
