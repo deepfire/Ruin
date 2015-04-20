@@ -713,9 +713,9 @@ do_forge_chainlinks compmap ctxmap buildables chainmap tooldefs tag (clink_name,
             ignt trace (printf "4   ξ → link @ %s:  %s → %s" (show $ id_step (0-1)) (show inp) (show link)) res,
      -- compute result
      if
-     | depth ≡ 0              → [     (ins, ChainLink ifs ity outfile upwardty tk xq xf)
-                                | let (ins, ChainLink ifs ity _       _        tk xq xf):_ = result
-                                      outfile = outdir </> clink_name <.> (type_extension upwardty) ]
+     | depth ≡ 0              → [ (ins, ChainLink ifs ity outfile upwardty tk xq xf)
+                                | (ins, ChainLink ifs ity _       _        tk xq xf) ← result,
+                                  let outfile = outdir </> clink_name <.> (type_extension upwardty) ]
      | type_fusing_p upwardty → [ (ins, ChainLink (foldl (\inacc (_, ChainLink _ _ inarg _ _ _ _) → inacc ++ [inarg])
                                                           [] result)
                                                    thisty outfile upwardty tkind xquery clink_xform)
