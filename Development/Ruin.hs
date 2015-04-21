@@ -52,6 +52,9 @@ module Development.Ruin
     -- * Entry point
     , RuinSpec(..)
     , ruinArgsWith
+
+    -- * Extras
+    , wantOrderly
     ) where
 
 import GHC.Exts (sortWith)
@@ -993,3 +996,7 @@ ruinArgsWith (RuinSpec shakeDir buildHs thisPlat context tools chains components
 
 pwhen ∷ Bool → a → Maybe a
 pwhen cond body = if not cond then Nothing else Just body
+
+-- * A order-enforcing variant of @want@.
+wantOrderly ∷ [String] → Rules ()
+wantOrderly targets = action $ do forM_ targets $ \target → need [target]
