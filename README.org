@@ -2,9 +2,101 @@
 
 * Ruin
 
-A higher-level DSL layer atop Shake, used to define complex build systems in terms
-that are supposedly closer to what a build engineer might think in:
+  A higher-level DSL layer atop Shake, intended to facilitate definition of
+  complex build systems in terms that are supposedly closer to what a build
+  engineer might think in:
 
-  - Platforms (Arch, OS)
-  - Tools & tool pipelines
+  - Platforms (Arch, OS types and versions)
+  - Tools & tool chains (pipelines)
   - Components
+  - Build variables
+
+  A set of escape hatches to the more primitive abstractions -- such as plain
+  Shake rules, rule synonyms, defaulted and copied files are available.
+
+* How to think, when designing a build system with Ruin
+
+  1. Determine the set of target platforms -- a set of (possibly versioned) =OS=
+     environments which is a product of the =OSType= set multiplied by the set of
+     intended hardware =Arch=-itectures.
+
+  2. Determine the set of file =Type='s -- both source, intermediate and final.
+
+  3. From these, define the tools that transform between the =Type='s, with the
+     platforms taken into account.  They map into =DefTool= definitions.  The
+     tools can be also themselves produced by the build process.
+
+  4. Factor the subset of build variance, that is supposed to be directly
+     parametrized on the command line, into variable definitions.  Which can refer
+     to each other, naturally.  This is captured by a value of type =VarEnv → VarMap=.
+
+  5. Determine the components (which may overlap, in their composition) of what a
+     build consists of, as well as the arbitrary groups these components fall into
+     (which, again, might overlap, effectively producing the same component twice)
+     -- these map into =Component= and =Tag= types.  These definitions have access
+     to the aforementioned =VarEnv=.  Components may refer to each other, so as to
+     facilitate their nested composition.
+
+  6. Describe the inherently conditional context -- sets of source files and
+     applicable flags, tying the environment aspects (architecture, OS,
+     shell-queryables) into component structure (source files and their types,
+     tool kinds, component group membership), in a hierarchical manner (actually a
+     DAG of =Ctx= nodes).  This definition of context also has access to the =VarEnv=.
+
+  7. Determine, for each component, how to assemble the tools into chains, so
+     as to produce them -- these map to =DefChain= definitions.
+
+  8. Determine the buildable objects -- the product of the components (considered
+     by their group tags), target platforms -- mapping into the desired output
+     pathname layout, a so-called =Schema=.
+
+  9. Provide a top-level entry point, feeding all of the above into a
+     =ruinArgsWith=, spicing it up with arbitrary =Shake= rules, which get access
+     to the products of the above declarations:
+
+     - the set of buildables
+     - the =VarEnv=
+
+* Notable differences from 'make'
+
+  Since Ruin is based on Shake, it inherits a set of semantic differences from GNU
+  Make, in the scope of things that are conceptually shared between them.  Here's
+  an attempt to enumerate these differences.
+
+*** Update semantics
+
+    When it comes to file targets, Make has very simple, purely functional update
+    semantics -- whenever a dependendent file is older than it's prerequisite, it's
+    unconditionally remade, no questions asked.
+
+    Not so with Shake/Ruin.  Shake remembers the exit status of the action used to
+    rebuild a file target in its internal database, and uses that, instead of
+    blindly relying on timestamp only. 
+
+    Specifically, it means that if the dependent file generation action was
+    successful, but the timestamp of the dependent file did not change, then the
+    action will not be re-run, until the prerequisite has its timestamp changed
+    again.
+
+*** Rule order
+
+    In GNU Make, unless you induce parallellism using the -j flag, the order of
+    rules in the command line is the order in which Make will satisfy them.
+
+    Not so in Shake/Ruin -- the =want= directive, which specifies the targets to
+    be made provides no ordering constraint whatsoever.
+
+    However, since the sequencing behavior can be inherently useful, when used in
+    a command line, since it simulates scripting, this limitation can be overcame
+    -- just put the following, at the Rule level:
+
+    #+BEGIN_SRC haskell
+    wantOrderly targets
+    #+END_SRC
+
+    ..where =targets= is bound by the lambda provided to ruinArgsWith:
+
+    #+BEGIN_SRC haskell
+    ruinArgsWith RuinSpec { {- ... -} }
+                 $ \params targets varenv outFileBuildables nameBuildables → do
+    #+END_SRC
